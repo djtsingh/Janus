@@ -1,205 +1,83 @@
 package store
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"net"
-	"strings"
-	"sync"
+	"context"
+	"encoding/json"
 	"time"
 
-	"golang.org/x/time/rate"
+	"github.com/go-redis/redis/v8"
 )
 
-// Session stores ephemeral data per client IP (MVP in-memory)
+var ctx = context.Background()
+
 type Session struct {
-	Score        float64
-	Verified     bool
-	LastSeen     time.Time
-	PagesVisited int
-	ScrollEvents int
-	Nonces       map[string]time.Time
-	Banned       bool
-	Limiter      *rate.Limiter
+	VerifiedAt              time.Time `json:"verifiedAt"`
+	LastSeen                time.Time `json:"lastSeen"`
+	HasScrolled             bool      `json:"hasScrolled"`
+	HasNaturalMouseMovement bool      `json:"hasNaturalMouseMovement"`
+	PagesViewed             int       `json:"pagesViewed"`
+	NavigationPath          []string  `json:"navigationPath"`
 }
 
-var (
-	mu           sync.Mutex
-	sessions     = make(map[string]*Session)
-	sessionTTL   = 15 * time.Minute
-	defaultRPS   = 10
-	defaultBurst = 20
-)
-
-// Init initializes default limits (call once at startup)
-func Init(ttlSec, rps, burst int) {
-	if ttlSec > 0 {
-		sessionTTL = time.Duration(ttlSec) * time.Second
-	}
-	if rps > 0 {
-		defaultRPS = rps
-	}
-	if burst > 0 {
-		defaultBurst = burst
-	}
-	go cleanupLoop()
+type Store struct {
+	rdb *redis.Client
 }
 
-// NormalizeIP returns host portion of addr
-func NormalizeIP(remoteAddr string) string {
-	host, _, err := net.SplitHostPort(remoteAddr)
+func New(redisAddr string) *Store {
+	rdb := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+	})
+	// We no longer need the background cleanup goroutine for visitors.
+	return &Store{rdb: rdb}
+}
+
+// --- Session Methods (No changes here) ---
+
+func (st *Store) GetSession(token string) (*Session, bool) {
+	key := "session:" + token
+	val, err := st.rdb.Get(ctx, key).Bytes()
 	if err != nil {
-		return strings.TrimSpace(remoteAddr)
+		return nil, false
 	}
-	return host
-}
-
-func getSession(ip string) *Session {
-	mu.Lock()
-	defer mu.Unlock()
-	s, ok := sessions[ip]
-	if !ok {
-		s = &Session{
-			Score:    0,
-			Verified: false,
-			LastSeen: time.Now(),
-			Nonces:   make(map[string]time.Time),
-			Limiter:  rate.NewLimiter(rate.Limit(defaultRPS), defaultBurst),
-		}
-		sessions[ip] = s
+	var session Session
+	if err := json.Unmarshal(val, &session); err != nil {
+		return nil, false
 	}
-	s.LastSeen = time.Now()
-	return s
+	return &session, true
 }
 
-// GenerateNonce returns a crypto-random short string
-func GenerateNonce() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-// AddNonce records a nonce with TTL for IP
-func AddNonce(remoteAddr, nonce string, ttlSec int) {
-	ip := NormalizeIP(remoteAddr)
-	s := getSession(ip)
-	mu.Lock()
-	defer mu.Unlock()
-	s.Nonces[nonce] = time.Now().Add(time.Duration(ttlSec) * time.Second)
-}
-
-// ValidateNonce returns true if nonce exists and not expired; it deletes the nonce on success.
-func ValidateNonce(remoteAddr, nonce string) bool {
-	ip := NormalizeIP(remoteAddr)
-	mu.Lock()
-	defer mu.Unlock()
-	s, ok := sessions[ip]
-	if !ok {
-		return false
+func (st *Store) SetSession(token string, session *Session, timeout time.Duration) error {
+	key := "session:" + token
+	val, err := json.Marshal(session)
+	if err != nil {
+		return err
 	}
-	exp, exists := s.Nonces[nonce]
-	if !exists {
-		return false
+	return st.rdb.Set(ctx, key, val, timeout).Err()
+}
+
+func (st *Store) DeleteSession(token string) error {
+	key := "session:" + token
+	return st.rdb.Del(ctx, key).Err()
+}
+
+// --- NEW: Rate Limiter Method using Redis ---
+
+// IsRateLimited checks if an identifier has exceeded a limit in the last minute.
+func (st *Store) IsRateLimited(identifier string, limit int) (bool, error) {
+	key := "ratelimit:" + identifier
+
+	// Use a pipeline to execute commands atomically and efficiently.
+	pipe := st.rdb.Pipeline()
+	// INCR returns the new value of the key after incrementing.
+	count := pipe.Incr(ctx, key)
+	// Set the key to expire in 1 minute, but only if it's a new key.
+	pipe.ExpireNX(ctx, key, 1*time.Minute)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return true, err // Fail closed (assume rate limited on error)
 	}
-	if time.Now().After(exp) {
-		delete(s.Nonces, nonce)
-		return false
-	}
-	delete(s.Nonces, nonce)
-	return true
-}
 
-// UpdateScore increments the session score by delta and returns new score
-func UpdateScore(remoteAddr string, delta float64) float64 {
-	ip := NormalizeIP(remoteAddr)
-	s := getSession(ip)
-	mu.Lock()
-	defer mu.Unlock()
-	s.Score += delta
-	if s.Score > 100 {
-		s.Score = 100
-	}
-	if s.Score < -100 {
-		s.Score = -100
-	}
-	return s.Score
-}
-
-func GetScore(remoteAddr string) float64 {
-	ip := NormalizeIP(remoteAddr)
-	mu.Lock()
-	defer mu.Unlock()
-	s, ok := sessions[ip]
-	if !ok {
-		return 0
-	}
-	return s.Score
-}
-
-func IncrementPages(remoteAddr string) {
-	ip := NormalizeIP(remoteAddr)
-	s := getSession(ip)
-	mu.Lock()
-	s.PagesVisited++
-	mu.Unlock()
-}
-
-func IncrementScrolls(remoteAddr string) {
-	ip := NormalizeIP(remoteAddr)
-	s := getSession(ip)
-	mu.Lock()
-	s.ScrollEvents++
-	mu.Unlock()
-}
-
-func SetVerified(remoteAddr string, v bool) {
-	ip := NormalizeIP(remoteAddr)
-	s := getSession(ip)
-	mu.Lock()
-	s.Verified = v
-	mu.Unlock()
-}
-
-func Ban(remoteAddr string) {
-	ip := NormalizeIP(remoteAddr)
-	s := getSession(ip)
-	mu.Lock()
-	s.Banned = true
-	mu.Unlock()
-}
-
-func IsBanned(remoteAddr string) bool {
-	//ip := NormalizeIP(remoteAddr)
-	mu.Lock()
-	defer mu.Unlock()
-	s, ok := sessions[remoteAddr]
-	if !ok {
-		// also check normalized ip
-		ip := NormalizeIP(remoteAddr)
-		s, ok = sessions[ip]
-		if !ok {
-			return false
-		}
-	}
-	return s.Banned
-}
-
-func Allow(remoteAddr string) bool {
-	ip := NormalizeIP(remoteAddr)
-	s := getSession(ip)
-	return s.Limiter.Allow()
-}
-
-func cleanupLoop() {
-	for {
-		time.Sleep(time.Minute)
-		mu.Lock()
-		now := time.Now()
-		for ip, s := range sessions {
-			if now.Sub(s.LastSeen) > sessionTTL {
-				delete(sessions, ip)
-			}
-		}
-		mu.Unlock()
-	}
+	// Check if the count for this minute has exceeded the limit.
+	return count.Val() > int64(limit), nil
 }

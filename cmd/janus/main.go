@@ -1,132 +1,109 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
+	"bytes"
+	"flag"
+	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
-	"os/signal"
-	"syscall"
+	"strconv" // <-- IMPORT ADDED
+	"strings"
 	"time"
-
-	"github.com/gorilla/mux"
 
 	"janus/internal/config"
 	"janus/internal/handlers"
-	"janus/internal/proxy"
+	"janus/internal/middleware"
 	"janus/internal/store"
 )
 
-// AppVersion defines the current version of the service
-const AppVersion = "v1.0.0"
-
-// HealthHandler responds with a simple health check
-func HealthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(fmt.Sprintf("Service is running. Version: %s", AppVersion)))
-}
-
-var currentNonce = "test-nonce"
-
-// TelemetryHandler receives telemetry from sensor.js
-func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json") // always set headers first
-
-	// Parse request body
-	var payload map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		w.WriteHeader(http.StatusBadRequest) // only one WriteHeader
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "invalid payload",
-		})
-		return
-	}
-
-	// Check nonce (for testing, accept only currentNonce)
-	nonce, ok := payload["nonce"].(string)
-	if !ok || nonce != currentNonce {
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error": "invalid nonce",
-		})
-		return
-	}
-
-	// Accept telemetry
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"ok":  true,
-		"msg": "telemetry accepted",
-	})
-}
+var sensorScript []byte
 
 func main() {
-
-	// Create root context for graceful shutdown
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// Router setup
-	router := mux.NewRouter()
-	router.HandleFunc("/health", HealthHandler).Methods("GET")
-
-	// Add more routes here (auth, proof-of-humanity, proxy, etc.)
-	cfg, err := config.Load("config.json")
+	// 1. Load Configuration
+	cfgPath := flag.String("config", "config.dev.json", "path to config file")
+	flag.Parse()
+	cfg, err := config.Load(*cfgPath)
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		log.Fatalf("FATAL: could not load config: %v", err)
 	}
 
-	// init store
-	store.Init(cfg.SessionTimeoutSeconds, cfg.RateLimitRPS, cfg.RateLimitBurst)
-
-	// static files
-	router.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir(cfg.StaticDir))))
-
-	// telemetry & verify endpoints (handlers package)
-	//router.Handle(cfg.TelemetryPath, handlers.TelemetryHandler(cfg)).Methods("POST")
-	router.Handle(cfg.VerifyPath, handlers.VerifyHandler(cfg)).Methods("POST")
-	router.HandleFunc("/telemetry", TelemetryHandler).Methods("POST")
-	router.HandleFunc("/telemetry", handlers.TelemetryHandler).Methods("POST")
-	handlers.GenerateNonce("test-nonce")
-
-	// proxy as catch-all: create proxy handler and mount to root
-	p, err := proxy.NewProxy(cfg)
+	// Read sensor script into memory
+	sensorPath := cfg.StaticDir + "/sensor.js"
+	sensorScript, err = os.ReadFile(sensorPath)
 	if err != nil {
-		log.Fatalf("proxy init: %v", err)
+		log.Fatalf("FATAL: could not read sensor.js at %s: %v", sensorPath, err)
 	}
-	router.PathPrefix("/").Handler(p)
 
-	// Server configuration
-	server := &http.Server{
-		Addr:         ":8080",
-		Handler:      router,
+	// 2. Initialize Dependencies
+	st := store.New(cfg.RedisAddr)
+	h := handlers.New(cfg, st)
+	mw := middleware.New(cfg, st)
+
+	// 3. Set up Proxy and Static File Server
+	originUrl, err := url.Parse(cfg.BackendURL)
+	if err != nil {
+		log.Fatalf("FATAL: invalid backend URL: %v", err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(originUrl)
+	proxy.ModifyResponse = modifyHTMLResponse // Set our script injector
+	fs := http.FileServer(http.Dir(cfg.StaticDir))
+
+	// 4. Set up the Router (ServeMux)
+	mux := http.NewServeMux()
+	mux.HandleFunc(cfg.VerifyPath, h.VerifyHandler)
+	mux.HandleFunc(cfg.TelemetryPath, h.TelemetryHandler)
+	mux.Handle("/static/", http.StripPrefix("/static/", fs))
+	mux.Handle("/", proxy) // Proxy is the catch-all
+
+	// 5. Chain the Middleware
+	chainedHandler := mw.Session(mw.RateLimiter(mux))
+
+	// 6. Configure and Start the Server
+	srv := &http.Server{
+		Addr:         cfg.ListenAddr,
+		Handler:      chainedHandler,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
-	// Start server in a goroutine
-	go func() {
-		log.Printf("🚀 Starting secure identity service on %s (version %s)\n", server.Addr, AppVersion)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("❌ Could not start server: %v\n", err)
-		}
-	}()
+	log.Printf("INFO: Janus listening on %s, proxying to %s", cfg.ListenAddr, cfg.BackendURL)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatalf("FATAL: could not start server: %v", err)
+	}
+}
 
-	// Block until shutdown signal
-	<-ctx.Done()
-	stop()
-	log.Println("⚠️ Shutdown signal received")
+// modifyHTMLResponse injects our sensor into HTML pages.
+func modifyHTMLResponse(resp *http.Response) error {
+	contentType := resp.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		return nil
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
 
-	// Gracefully shut down
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("❌ Server forced to shutdown: %v", err)
+	bodyString := string(bodyBytes)
+	injectionPoint := strings.LastIndex(bodyString, "</body>")
+	if injectionPoint == -1 {
+		resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		return nil
 	}
 
-	log.Println("✅ Server exited gracefully")
+	scriptTag := "<script>" + string(sensorScript) + "</script>"
+	modifiedBody := bodyString[:injectionPoint] + scriptTag + bodyString[injectionPoint:]
+
+	// --- THIS IS THE FIX ---
+	resp.Body = io.NopCloser(bytes.NewBufferString(modifiedBody))
+	// Correctly calculate and set the new Content-Length.
+	resp.ContentLength = int64(len(modifiedBody))
+	resp.Header.Set("Content-Length", strconv.Itoa(len(modifiedBody)))
+	// --- END OF FIX ---
+
+	return nil
 }
