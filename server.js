@@ -1,5 +1,3 @@
-// server.js
-
 const http = require('http');
 
 // This is a complete, valid HTML5 document to prevent browser "Quirks Mode".

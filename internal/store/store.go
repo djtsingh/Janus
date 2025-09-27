@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 )
 
 var ctx = context.Background()
@@ -58,6 +59,23 @@ func (st *Store) SetSession(token string, session *Session, timeout time.Duratio
 func (st *Store) DeleteSession(token string) error {
 	key := "session:" + token
 	return st.rdb.Del(ctx, key).Err()
+}
+
+func (st *Store) CreateNonce(ttl time.Duration) (string, error) {
+	nonce := uuid.New().String()
+	key := "nonce:" + nonce
+	err := st.rdb.Set(ctx, key, "valid", ttl).Err()
+	return nonce, err
+}
+
+// ValidateNonce checks if a nonce exists and immediately deletes it to prevent reuse.
+func (st *Store) ValidateNonce(nonce string) bool {
+	key := "nonce:" + nonce
+	// GETDEL is an atomic get-and-delete operation.
+	// If the key exists, it's deleted and its value is returned. Otherwise, it returns an error.
+	err := st.rdb.GetDel(ctx, key).Err()
+	// If there's no error, the key existed and was deleted successfully.
+	return err == nil
 }
 
 // --- NEW: Rate Limiter Method using Redis ---

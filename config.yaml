@@ -1,0 +1,6 @@
+rate_limit_rps: 10
+difficulty: medium
+whitelist_ua:
+  - Googlebot
+  - Twitterbot
+  - facebookexternalhit

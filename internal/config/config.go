@@ -1,30 +1,34 @@
 package config
 
 import (
-	"encoding/json"
-	"os"
+	"io/ioutil"
+	"log"
+
+	"gopkg.in/yaml.v3"
 )
 
-type Config struct {
-	ListenAddr        string `json:"listen_addr"`
-	BackendURL        string `json:"backend_url"`
-	RedisAddr         string `json:"redis_addr"` // <-- ADD THIS LINE
-	TelemetryPath     string `json:"telemetry_path"`
-	VerifyPath        string `json:"verify_path"`
-	SessionTimeoutSec int    `json:"session_timeout_seconds"`
-	NonceTTLSeconds   int    `json:"nonce_ttl_seconds"`
-	StaticDir         string `json:"static_dir"`
+type JanusConfig struct {
+	RateLimitRPS int      `yaml:"rate_limit_rps"`
+	Difficulty   string   `yaml:"difficulty"`
+	WhitelistUA  []string `yaml:"whitelist_ua"`
 }
 
-func Load(path string) (*Config, error) {
-	f, err := os.Open(path)
+func LoadConfig(path string) (*JanusConfig, error) {
+	cfg := &JanusConfig{
+		RateLimitRPS: 10,
+		Difficulty:   "medium",
+		WhitelistUA:  []string{"Googlebot", "Twitterbot"},
+	}
+
+	data, err := ioutil.ReadFile(path)
 	if err != nil {
+		log.Printf("Config file not found at %s, using defaults: %v", path, err)
+		return cfg, nil
+	}
+
+	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	var c Config
-	if err := json.NewDecoder(f).Decode(&c); err != nil {
-		return nil, err
-	}
-	return &c, nil
+
+	return cfg, nil
 }
