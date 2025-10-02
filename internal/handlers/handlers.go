@@ -9,35 +9,24 @@ import (
 	"janus/internal/types"
 )
 
-func HandleFingerprint(store map[string]types.Fingerprint) http.HandlerFunc {
+func HandleFingerprint(store *types.FingerprintStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		clientIP := getClientIP(r)
-		log.Printf("HandleFingerprint: Received request from IP %s, Headers: %+v", clientIP, r.Header)
-
-		if r.Header.Get("Content-Type") != "application/json" {
-			log.Printf("HandleFingerprint: Invalid Content-Type: %s for IP %s", r.Header.Get("Content-Type"), clientIP)
-			http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
-			return
-		}
-
 		var fp types.Fingerprint
 		if err := json.NewDecoder(r.Body).Decode(&fp); err != nil {
-			log.Printf("HandleFingerprint: Decode error for IP %s: %v", clientIP, err)
-			http.Error(w, "Invalid fingerprint", http.StatusBadRequest)
+			// ... function body
 			return
 		}
 
-		if fp.CanvasHash == "" || fp.Timezone == "" {
-			log.Printf("HandleFingerprint: Missing required fields for IP %s: %+v", clientIP, fp)
-			http.Error(w, "Missing required fingerprint fields", http.StatusBadRequest)
-			return
-		}
+		// ...
+		fp.ClientIP = getClientIP(r)
 
-		store[clientIP] = fp
-		log.Printf("HandleFingerprint: Stored fingerprint for IP %s: %+v", clientIP, fp)
-		w.Header().Set("Content-Type", "application/json")
+		store.Lock()
+		// You must also change "data" to "Data" here
+		store.Data[fp.ClientIP] = fp
+		store.Unlock()
+
+		log.Printf("HandleFingerprint: Stored fingerprint for %s: %+v", fp.ClientIP, fp)
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 	}
 }
 

@@ -1,10 +1,17 @@
+// internal/middleware/janus.go
 package middleware
 
 import (
+	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,30 +24,76 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/oschwald/geoip2-golang/v2"
 )
 
-// Global vars
+// Custom context key type to avoid collisions (SA1029)
+type contextKey string
+
+const (
+	ja3ContextKey contextKey = "ja3"
+)
+
+type ChallengeStore struct {
+	sync.RWMutex
+	data map[string]struct {
+		Challenge *types.Challenge
+		Expires   time.Time
+	}
+}
+
 var (
-	loadedConfig     *config.JanusConfig
-	configOnce       sync.Once
-	jwtSecret        = []byte("your-secure-random-secret-key-32bytes") // Move to config in production
-	fingerprintStore = struct {
-		sync.RWMutex
-		data map[string]types.Fingerprint
-	}{data: make(map[string]types.Fingerprint)}
-	challengeStore = struct {
-		sync.RWMutex
-		data map[string]string // nonce -> expectedHash
-	}{data: make(map[string]string)}
+	fingerprintStore = &types.FingerprintStore{Data: make(map[string]types.Fingerprint)}
+
+	challengeStore = &ChallengeStore{data: make(map[string]struct {
+		Challenge *types.Challenge
+		Expires   time.Time
+	})}
+	loadedConfig *config.JanusConfig
+	configOnce   sync.Once
+	jwtSecret    = []byte("your-secure-random-secret-key-32bytes")
+	geoDB        *geoip2.Reader
 )
 
-// JanusMiddleware
+var janusRouter *chi.Mux
+
+func init() {
+	janusRouter = chi.NewRouter()
+	// CORRECTED LINE:
+	janusRouter.Post("/janus/fingerprint", handlers.HandleFingerprint(fingerprintStore))
+	janusRouter.Get("/janus/challenge", handleChallenge)
+	janusRouter.Post("/janus/verify", handleVerify)
+}
+
+func init() {
+	var err error
+	geoDB, err = geoip2.Open("GeoLite2-City.mmdb")
+	if err != nil {
+		log.Printf("init: GeoIP database load error: %v, geo checks disabled", err)
+	}
+
+	// Periodically clean up expired challenges
+	go func() {
+		for {
+			time.Sleep(1 * time.Minute)
+			challengeStore.Lock()
+			for key, stored := range challengeStore.data {
+				if time.Now().After(stored.Expires) {
+					delete(challengeStore.data, key)
+				}
+			}
+			challengeStore.Unlock()
+		}
+	}()
+}
+
 func JanusMiddleware(next http.Handler) http.Handler {
 	configOnce.Do(func() {
 		var err error
 		loadedConfig, err = config.LoadConfig("config.yaml")
 		if err != nil {
-			log.Fatalf("Failed to load config: %v", err)
+			log.Printf("Failed to load config: %v, using default config", err)
+			loadedConfig = config.DefaultConfig()
 		}
 	})
 
@@ -48,77 +101,268 @@ func JanusMiddleware(next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clientIP := getClientIP(r)
-		ua := r.Header.Get("User-Agent")
-		log.Printf("Request: %s, Method: %s, IP: %s, UA: %s", r.URL.Path, r.Method, clientIP, ua)
+		log.Printf("Request: %s, Method: %s, IP: %s, UA: %s", r.URL.Path, r.Method, clientIP, r.Header.Get("User-Agent"))
 
-		// Bypass middleware for /sensor.js
-		if r.URL.Path == "/sensor.js" {
-			log.Printf("Bypassing middleware for /sensor.js")
-			next.ServeHTTP(w, r)
-			return
-		}
+		// --- CORRECTED LOGIC ---
 
-		// Handle /janus/* endpoints
+		// 1. Immediately handle API and asset requests for the challenge process.
+		// These paths must be exempt from the main verification checks.
 		if strings.HasPrefix(r.URL.Path, "/janus/") {
-			log.Printf("Serving Janus endpoint: %s", r.URL.Path)
-			subR := chi.NewRouter()
-			subR.Post("/fingerprint", handlers.HandleFingerprint(fingerprintStore.data))
-			subR.Get("/challenge", handleChallenge)
-			subR.Get("/mobile-challenge", handleMobileChallenge)
-			subR.Post("/verify", handleVerify)
-			// Strip /janus prefix for sub-router
-			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/janus")
-			subR.ServeHTTP(w, r)
+			log.Printf("Serving Janus API endpoint: %s", r.URL.Path)
+			janusRouter.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/sensor.js" {
+			log.Printf("Serving sensor.js asset")
+			// Explicitly serve the file to prevent middleware loops.
+			http.ServeFile(w, r, "assets/sensor.js")
 			return
 		}
 
+		// 2. Apply rate limiting to all other requests.
 		if !rlStore.Allow(clientIP) {
 			log.Printf("Rate limit exceeded for %s", clientIP)
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
 
-		suspicious := isSuspicious(r, loadedConfig)
-		log.Printf("Suspicious: %v", suspicious)
-		if suspicious {
-			log.Printf("Issuing challenge for %s", clientIP)
-			issueChallenge(w, r)
+		// 3. Check if the user is ALREADY verified with a valid token. If so, let them pass.
+		if isVerified(r) {
+			log.Printf("Serving content for verified user %s", clientIP)
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		verified := isVerified(r)
-		log.Printf("Verified: %v", verified)
-		if !verified {
-			log.Printf("Verification failed for %s", clientIP)
-			http.Error(w, "Verification required", http.StatusForbidden)
-			return
-		}
-
-		log.Printf("Serving content for %s", clientIP)
-		next.ServeHTTP(w, r)
+		// 4. If we reach here, the user is NOT verified. Issue the challenge.
+		// We can still log the suspicion score for analytics, but the outcome is the same.
+		suspicious, score := isSuspicious(r, loadedConfig)
+		log.Printf("Unverified user. Suspicious: %v, Score: %d. Issuing challenge.", suspicious, score)
+		issueChallenge(w, r)
 	})
 }
 
-// Revamped isSuspicious
-func isSuspicious(r *http.Request, cfg *config.JanusConfig) bool {
-	ua := r.Header.Get("User-Agent")
-	clientIP := getClientIP(r)
-	for _, allowed := range cfg.WhitelistUA {
-		if strings.Contains(strings.ToLower(ua), strings.ToLower(allowed)) {
-			log.Printf("isSuspicious: Whitelisted UA %s for IP %s", ua, clientIP)
-			return false
+func getClientIP(r *http.Request) string {
+	log.Printf("getClientIP: X-Forwarded-For: %s, RemoteAddr: %s", r.Header.Get("X-Forwarded-For"), r.RemoteAddr)
+	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+		ip := strings.Split(forwarded, ",")[0]
+		ip = strings.TrimSpace(ip)
+		if ip != "" && ip != "[" {
+			return ip
 		}
 	}
-	fingerprintStore.RLock()
-	_, hasFingerprint := fingerprintStore.data[clientIP]
-	fingerprintStore.RUnlock()
-
-	suspicious := ua == "" || strings.Contains(ua, "curl") || strings.Contains(ua, "python") || strings.Contains(ua, "Headless") || !hasFingerprint
-	log.Printf("isSuspicious: UA %s, IP %s, HasFingerprint: %v, Suspicious: %v", ua, clientIP, hasFingerprint, suspicious)
-	return suspicious
+	addr := r.RemoteAddr
+	if strings.HasPrefix(addr, "[") {
+		end := strings.LastIndex(addr, "]")
+		if end != -1 {
+			ip := addr[1:end]
+			if ip != "" {
+				return ip
+			}
+		}
+	} else {
+		parts := strings.Split(addr, ":")
+		if len(parts) > 0 {
+			ip := strings.TrimSpace(parts[0])
+			if ip != "" {
+				return ip
+			}
+		}
+	}
+	return "unknown"
 }
 
-// Revamped isVerified
+func getJA3Fingerprint(r *http.Request) string {
+	if r.TLS == nil {
+		log.Printf("getJA3Fingerprint: No TLS data for %s", r.RemoteAddr)
+		return "no-tls"
+	}
+	var parts []string
+	parts = append(parts, strconv.Itoa(int(r.TLS.Version)))
+	var ciphers []string
+	ciphers = append(ciphers, strconv.Itoa(int(r.TLS.CipherSuite)))
+	parts = append(parts, strings.Join(ciphers, "-"))
+	parts = append(parts, "0-23-65281-10-11-35-16-5-13-18-51-45-43-27")
+	parts = append(parts, "29-23-24")
+	parts = append(parts, "0")
+	ja3String := strings.Join(parts, ",")
+	ja3Hash := fmt.Sprintf("%x", md5.Sum([]byte(ja3String)))
+	log.Printf("getJA3Fingerprint: Generated fingerprint %s for %s", ja3Hash, r.RemoteAddr)
+	return ja3Hash
+}
+
+func isKnownBrowserJA3(ja3 string) bool {
+	known := []string{
+		"b2fa5d224d65e7c692fd46a0f52fce6b", // Chrome 140 (Windows)
+		"771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513,29-23-24,0",
+		"771,49195-49199-52393-52392-49196-49200-49161-49162-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27,29-23-24,0",
+		"771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-13-18-51-45-43-27-17513,29-23-24,0",
+		"771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-21,29-23-24-25,0",
+	}
+	for _, k := range known {
+		if ja3 == k {
+			log.Printf("isKnownBrowserJA3: Matched JA3 %s", ja3)
+			return true
+		}
+	}
+	log.Printf("isKnownBrowserJA3: No match for JA3 %s", ja3)
+	return false
+}
+
+func getHeaderOrder(r *http.Request) string {
+	headers := []string{}
+	for name := range r.Header {
+		headers = append(headers, strings.ToLower(name))
+	}
+	sort.Strings(headers)
+	return strings.Join(headers, ",")
+}
+
+func isSuspicious(r *http.Request, cfg *config.JanusConfig) (bool, int) {
+	ua := r.Header.Get("User-Agent")
+	clientIP := getClientIP(r)
+	score := 0
+
+	// 1. Whitelist Check
+	uaLower := strings.ToLower(ua)
+	uaWhitelisted := false
+	for _, allowed := range cfg.WhitelistUA {
+		allowedLower := strings.ToLower(allowed)
+		log.Printf("isSuspicious: Checking UA %s against whitelist %s", uaLower, allowedLower)
+		if strings.Contains(uaLower, allowedLower) {
+			uaWhitelisted = true
+			break
+		}
+	}
+	ipWhitelisted := false
+	for _, ip := range cfg.WhitelistIPs {
+		log.Printf("isSuspicious: Checking IP %s against whitelist %s", clientIP, ip)
+		if clientIP == ip {
+			ipWhitelisted = true
+			break
+		}
+	}
+	if uaWhitelisted && ipWhitelisted {
+		log.Printf("isSuspicious: Whitelisted UA %s and IP %s, bypassing checks", ua, clientIP)
+		return false, 0
+	}
+
+	// 2. IP Reputation Analysis
+	for _, blacklistedIP := range cfg.BlacklistedIPs {
+		if strings.HasPrefix(blacklistedIP, clientIP) || strings.Contains(blacklistedIP, "/") {
+			_, ipNet, err := net.ParseCIDR(blacklistedIP)
+			if err == nil && ipNet.Contains(net.ParseIP(clientIP)) {
+				score += cfg.SuspicionWeights["blacklisted_ip"]
+				log.Printf("isSuspicious: Blacklisted IP %s, Score: %d", clientIP, score)
+				return true, score
+			}
+			if blacklistedIP == clientIP {
+				score += cfg.SuspicionWeights["blacklisted_ip"]
+				log.Printf("isSuspicious: Blacklisted IP %s, Score: %d", clientIP, score)
+				return true, score
+			}
+		}
+	}
+	if geoDB != nil {
+		ipAddr, err := netip.ParseAddr(clientIP)
+		if err == nil {
+			record, err := geoDB.City(ipAddr)
+			if err == nil {
+				geoCode := record.Country.ISOCode
+				for _, bannedGeo := range cfg.BannedGeoLocations {
+					if geoCode == bannedGeo {
+						score += cfg.SuspicionWeights["banned_geo"]
+						log.Printf("isSuspicious: Banned geo %s for IP %s, Score: %d", geoCode, clientIP, score)
+						return true, score
+					}
+				}
+			} else {
+				log.Printf("isSuspicious: GeoIP lookup failed for %s: %v", clientIP, err)
+			}
+		} else {
+			log.Printf("isSuspicious: Invalid IP %s: %v", clientIP, err)
+		}
+	} else {
+		log.Printf("isSuspicious: GeoIP database not loaded, skipping geo checks for %s", clientIP)
+	}
+
+	// 3. TLS/SSL Handshake Fingerprinting (JA3)
+	ja3Fingerprint := getJA3Fingerprint(r)
+	if ja3Fingerprint != "" && !isKnownBrowserJA3(ja3Fingerprint) {
+		score += cfg.SuspicionWeights["tls_mismatch"]
+		log.Printf("isSuspicious: Suspicious JA3 %s for IP %s, Score: %d", ja3Fingerprint, clientIP, score)
+	}
+
+	// 4. JA3 Mismatch (UA vs JA3)
+	if ja3Fingerprint != "" && ja3Fingerprint != "no-tls" && ja3Fingerprint != "unknown-ja3" {
+		if strings.Contains(uaLower, "firefox") && !strings.Contains(ja3Fingerprint, "49195") {
+			score += cfg.SuspicionWeights["tls_mismatch"]
+			log.Printf("isSuspicious: JA3 mismatch with UA %s for IP %s, JA3: %s, Score: %d", ua, clientIP, ja3Fingerprint, score)
+		}
+	}
+
+	// 5. HTTP Headers Inspection
+	if ua == "" || strings.Contains(uaLower, "curl") || strings.Contains(uaLower, "python") {
+		score += cfg.SuspicionWeights["no_user_agent"]
+		log.Printf("isSuspicious: Suspicious UA %s for IP %s, Score: %d", ua, clientIP, score)
+	}
+	if strings.Contains(uaLower, "headless") {
+		score += cfg.SuspicionWeights["headless_browser"]
+		log.Printf("isSuspicious: Headless browser detected for IP %s, Score: %d", clientIP, score)
+	}
+	if r.Header.Get("Accept") == "" && !strings.Contains(r.URL.Path, ".well-known") {
+		score += cfg.SuspicionWeights["missing_headers"]
+		log.Printf("isSuspicious: Missing Accept header for IP %s, Score: %d", clientIP, score)
+	}
+	headerOrder := getHeaderOrder(r)
+	expectedHeaders := []string{"user-agent", "accept-language", "accept-encoding"}
+	headersPresent := true
+	for _, h := range expectedHeaders {
+		if r.Header.Get(h) == "" {
+			headersPresent = false
+			break
+		}
+	}
+	if !headersPresent && !strings.Contains(r.URL.Path, ".well-known") {
+		score += cfg.SuspicionWeights["header_order_mismatch"]
+		log.Printf("isSuspicious: Missing expected headers for IP %s, Score: %d", clientIP, score)
+	}
+
+	// 6. DOM/API and Device Fingerprint Checks
+	fingerprintStore.RLock()
+	fp, hasFingerprint := fingerprintStore.Data[clientIP]
+	fingerprintStore.RUnlock()
+	if !hasFingerprint {
+		score += cfg.SuspicionWeights["no_fingerprint"]
+		log.Printf("isSuspicious: No fingerprint for IP %s, Score: %d", clientIP, score)
+	} else {
+		if fp.Webdriver {
+			score += cfg.SuspicionWeights["headless_browser"]
+			log.Printf("isSuspicious: Webdriver detected for IP %s, Score: %d", clientIP, score)
+		}
+		if !fp.ChromeExists && strings.Contains(uaLower, "chrome") {
+			score += cfg.SuspicionWeights["headless_browser"]
+			log.Printf("isSuspicious: Chrome UA but no window.chrome for IP %s, Score: %d", clientIP, score)
+		}
+		if fp.CanvasHash == "error" || fp.CanvasHash == "" {
+			score += cfg.SuspicionWeights["no_fingerprint"]
+			log.Printf("isSuspicious: Invalid canvas hash for IP %s, Score: %d", clientIP, score)
+		}
+		if fp.WebGLRenderer == "no-webgl" || fp.WebGLRenderer == "error" {
+			score += cfg.SuspicionWeights["no_fingerprint"]
+			log.Printf("isSuspicious: Invalid WebGL renderer for IP %s, Score: %d", clientIP, score)
+		}
+	}
+
+	suspicious := score >= cfg.SuspicionThreshold
+	log.Printf("isSuspicious: UA %s, IP %s, HasFingerprint: %v, JA3: %s, Headers: %s, Webdriver: %v, ChromeExists: %v, Score: %d, Suspicious: %v",
+		ua, clientIP, hasFingerprint, ja3Fingerprint, headerOrder, fp.Webdriver, fp.ChromeExists, score, suspicious)
+
+	ctx := context.WithValue(r.Context(), ja3ContextKey, ja3Fingerprint)
+	*r = *r.WithContext(ctx)
+
+	return suspicious, score
+}
+
 func isVerified(r *http.Request) bool {
 	cookie, err := r.Cookie("janus_token")
 	if err != nil {
@@ -153,150 +397,120 @@ func isVerified(r *http.Request) bool {
 	return true
 }
 
-// Revamped handleVerify
+func handleChallenge(w http.ResponseWriter, r *http.Request) {
+	clientIP := getClientIP(r)
+	fingerprintStore.RLock()
+	fp, hasFingerprint := fingerprintStore.Data[clientIP]
+	fingerprintStore.RUnlock()
+	if !hasFingerprint {
+		log.Printf("handleChallenge: No fingerprint for IP %s", clientIP)
+		http.Error(w, "No fingerprint", http.StatusBadRequest)
+		return
+	}
+
+	chal, zeroBits := challenge.GenerateChallenge(loadedConfig, fp.IsMobile)
+	if chal == nil {
+		log.Printf("handleChallenge: Failed to generate challenge for IP %s", clientIP)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Store challenge with expiration
+	challengeStore.Lock()
+	challengeStore.data[clientIP+chal.Nonce] = struct {
+		Challenge *types.Challenge
+		Expires   time.Time
+	}{Challenge: chal, Expires: time.Now().Add(5 * time.Minute)}
+	challengeStore.Unlock()
+
+	response := map[string]interface{}{
+		"nonce":      chal.Nonce,
+		"iterations": chal.Iterations,
+		"seed":       chal.Seed,
+		"clientIP":   clientIP,
+		"zeroBits":   zeroBits,
+	}
+	log.Printf("handleChallenge: Issued challenge for IP %s, nonce %s, zeroBits %d", clientIP, chal.Nonce, zeroBits)
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("handleChallenge: Failed to encode response for IP %s: %v", clientIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
+}
+
 func handleVerify(w http.ResponseWriter, r *http.Request) {
-	var v types.Verification
-	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
-		log.Printf("handleVerify: Invalid request body: %v", err)
-		http.Error(w, "Invalid verification payload", http.StatusBadRequest)
+	clientIP := getClientIP(r)
+	var req struct {
+		Nonce string `json:"nonce"`
+		Proof string `json:"proof"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("handleVerify: Invalid request body for IP %s: %v", clientIP, err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	if v.Nonce == "" || v.Proof == "" {
-		log.Printf("handleVerify: Missing nonce or proof")
-		http.Error(w, "Missing nonce or proof", http.StatusBadRequest)
+
+	fingerprintStore.RLock()
+	fp, hasFingerprint := fingerprintStore.Data[clientIP]
+	fingerprintStore.RUnlock()
+	if !hasFingerprint {
+		log.Printf("handleVerify: No fingerprint for IP %s", clientIP)
+		http.Error(w, "No fingerprint", http.StatusBadRequest)
 		return
 	}
+
+	// Retrieve challenge
 	challengeStore.RLock()
-	expectedHash, exists := challengeStore.data[v.Nonce]
+	stored, exists := challengeStore.data[clientIP+req.Nonce]
 	challengeStore.RUnlock()
-	if !exists {
-		log.Printf("handleVerify: Nonce %s not found", v.Nonce)
-		http.Error(w, "Invalid or expired nonce", http.StatusUnauthorized)
+	if !exists || time.Now().After(stored.Expires) {
+		log.Printf("handleVerify: No valid challenge for IP %s, nonce %s", clientIP, req.Nonce)
+		http.Error(w, "No valid challenge", http.StatusBadRequest)
 		return
 	}
-	if !challenge.VerifyChallenge(v.Proof, expectedHash) {
-		log.Printf("handleVerify: Proof verification failed for nonce %s", v.Nonce)
+
+	if !challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, stored.Challenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig) {
+		log.Printf("handleVerify: Proof verification failed for IP %s, nonce %s, proof %s", clientIP, req.Nonce, req.Proof)
 		http.Error(w, "Verification failed", http.StatusUnauthorized)
 		return
 	}
+
+	// Clean up challenge
 	challengeStore.Lock()
-	delete(challengeStore.data, v.Nonce)
+	delete(challengeStore.data, clientIP+req.Nonce)
 	challengeStore.Unlock()
-	clientIP := getClientIP(r)
-	log.Printf("handleVerify: Proof verified for IP %s, nonce %s", clientIP, v.Nonce)
+
+	log.Printf("handleVerify: Proof verified for IP %s, nonce %s", clientIP, req.Nonce)
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"ip":  clientIP,
 		"exp": time.Now().Add(24 * time.Hour).Unix(),
 	})
 	tokenString, err := token.SignedString(jwtSecret)
 	if err != nil {
-		log.Printf("handleVerify: Failed to issue token for IP %s: %v", clientIP, err)
-		http.Error(w, "Failed to issue token", http.StatusInternalServerError)
+		log.Printf("handleVerify: Failed to generate token for IP %s: %v", clientIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     "janus_token",
 		Value:    tokenString,
-		Expires:  time.Now().Add(24 * time.Hour),
+		Path:     "/",
 		HttpOnly: true,
-		Secure:   false, // Set to true in production
-		Path:     "/",   // Ensure cookie is available for all paths
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   24 * 60 * 60,
 	})
+
 	log.Printf("handleVerify: Issued token for IP %s", clientIP)
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
-}
-
-// handleChallenge
-func handleChallenge(w http.ResponseWriter, r *http.Request) {
-	clientIP := getClientIP(r)
-	ch, expectedHash := challenge.GenerateChallenge(loadedConfig)
-	if ch == nil {
-		log.Printf("handleChallenge: Failed to generate challenge for IP %s", clientIP)
-		http.Error(w, "Failed to generate challenge", http.StatusInternalServerError)
-		return
-	}
-	challengeStore.Lock()
-	challengeStore.data[ch.Nonce] = expectedHash
-	challengeStore.Unlock()
-	log.Printf("handleChallenge: Issued challenge for IP %s, nonce %s", clientIP, ch.Nonce)
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(ch); err != nil {
-		log.Printf("handleChallenge: Encode error for IP %s: %v", clientIP, err)
-		http.Error(w, "Failed to encode challenge", http.StatusInternalServerError)
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "success"}); err != nil {
+		log.Printf("handleVerify: Failed to encode response for IP %s: %v", clientIP, err)
 	}
 }
 
-// handleMobileChallenge
-func handleMobileChallenge(w http.ResponseWriter, r *http.Request) {
-	clientIP := getClientIP(r)
-	ch, expectedHash := challenge.GenerateMobileChallenge(loadedConfig)
-	if ch == nil {
-		log.Printf("handleMobileChallenge: Failed to generate challenge for IP %s", clientIP)
-		http.Error(w, "Failed to generate mobile challenge", http.StatusInternalServerError)
-		return
-	}
-	challengeStore.Lock()
-	challengeStore.data[ch.Nonce] = expectedHash
-	challengeStore.Unlock()
-	log.Printf("handleMobileChallenge: Issued challenge for IP %s, nonce %s", clientIP, ch.Nonce)
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(ch); err != nil {
-		log.Printf("handleMobileChallenge: Encode error for IP %s: %v", clientIP, err)
-		http.Error(w, "Failed to encode challenge", http.StatusInternalServerError)
-	}
-}
-
-// issueChallenge - Serve HTML page with script
 func issueChallenge(w http.ResponseWriter, r *http.Request) {
-	log.Printf("issueChallenge: Serving HTML challenge page")
-	w.Header().Set("Content-Type", "text/html")
-	html := `
-    <html>
-    <head>
-        <title>Verifying...</title>
-    </head>
-    <body>
-        <p>Verifying your request...</p>
-        <script src="/sensor.js"></script>
-    </body>
-    </html>
-    `
-	w.Write([]byte(html))
-}
-
-// getClientIP
-func getClientIP(r *http.Request) string {
-	log.Printf("getClientIP: X-Forwarded-For: %s, RemoteAddr: %s", r.Header.Get("X-Forwarded-For"), r.RemoteAddr)
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		ip := strings.Split(forwarded, ",")[0]
-		ip = strings.TrimSpace(ip)
-		if ip != "" && ip != "[" {
-			return ip
-		}
-	}
-	// Handle IPv6 and IPv4 RemoteAddr (e.g., [::1]:60500 or 127.0.0.1:60500)
-	addr := r.RemoteAddr
-	if strings.HasPrefix(addr, "[") {
-		// IPv6: Extract IP before port
-		end := strings.LastIndex(addr, "]")
-		if end != -1 {
-			ip := addr[1:end]
-			if ip != "" {
-				return ip
-			}
-		}
-	} else {
-		// IPv4: Split on colon
-		parts := strings.Split(addr, ":")
-		if len(parts) > 0 {
-			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
-				return ip
-			}
-		}
-	}
-	log.Printf("getClientIP: Falling back to default IP")
-	return "unknown"
+	log.Printf("issueChallenge: Serving HTML challenge page for %s", getClientIP(r))
+	http.ServeFile(w, r, "assets/challenge.html")
 }

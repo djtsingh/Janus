@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>JANUS Verification</title>
+    <script src="/sensor.js"></script>
+</head>
+<body>
+    <h1>Verifying your request...</h1>
+    <p id="status">Collecting fingerprint and processing challenge...</p>
+    <script>
+        // Update status based on console logs
+        console.log = (function (origLog) {
+            return function (message) {
+                origLog.apply(console, arguments);
+                const status = document.getElementById('status');
+                if (message.includes('Fingerprint submitted successfully')) {
+                    status.textContent = 'Fingerprint submitted, fetching challenge...';
+                } else if (message.includes('Received challenge')) {
+                    status.textContent = 'Challenge received, verifying...';
+                } else if (message.includes('Verification successful')) {
+                    status.textContent = 'Verification successful, redirecting...';
+                } else if (message.includes('failed')) {
+                    status.textContent = 'Verification failed, please try again.';
+                }
+            };
+        })(console.log);
+    </script>
+</body>
+</html>

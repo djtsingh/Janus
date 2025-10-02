@@ -1,6 +1,17 @@
-rate_limit_rps: 10
-difficulty: medium
-whitelist_ua:
-  - Googlebot
-  - Twitterbot
-  - facebookexternalhit
+suspicion_threshold: 50
+suspicion_weights:
+  blacklisted_ip: 100
+  banned_geo: 80
+  tls_mismatch: 30
+  no_user_agent: 40
+  headless_browser: 30
+  missing_headers: 20
+  header_order_mismatch: 40
+  no_fingerprint: 30
+blacklisted_ips: []
+whitelist_ips: ["127.0.0.1", "::1"]
+whitelist_ua: ["Chrome/"]
+banned_geo_locations: []
+rate_limit:
+  requests_per_minute: 60
+  burst: 10

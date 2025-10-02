@@ -1,65 +1,45 @@
 package ratelimit
 
 import (
+	"janus/internal/config"
 	"sync"
 	"time"
-
-	"janus/internal/config"
 )
 
-// Bucket represents a token bucket for an IP
-type Bucket struct {
-	Tokens     int
-	LastRefill time.Time
-}
-
-// Store is the in-memory rate limit store
 type Store struct {
-	Buckets map[string]*Bucket
-	mu      sync.RWMutex
-	RPS     int // Requests per second
+	sync.Mutex
+	data map[string]struct {
+		Count     int
+		LastReset time.Time
+	}
+	cfg *config.JanusConfig
 }
 
-// NewStore creates a new rate limit store from config
 func NewStore(cfg *config.JanusConfig) *Store {
 	return &Store{
-		Buckets: make(map[string]*Bucket),
-		RPS:     cfg.RateLimitRPS,
+		data: make(map[string]struct {
+			Count     int
+			LastReset time.Time
+		}),
+		cfg: cfg,
 	}
 }
 
-// Allow checks if the IP can make a request; returns true if allowed, false if limited
 func (s *Store) Allow(ip string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
-	b, exists := s.Buckets[ip]
-	if !exists {
-		b = &Bucket{
-			Tokens:     s.RPS,
-			LastRefill: now,
-		}
-		s.Buckets[ip] = b
-	}
-
-	elapsed := now.Sub(b.LastRefill).Seconds()
-	tokensToAdd := int(elapsed) * s.RPS
-	if tokensToAdd > 0 {
-		b.Tokens = min(b.Tokens+tokensToAdd, s.RPS)
-		b.LastRefill = now
-	}
-
-	if b.Tokens > 0 {
-		b.Tokens--
+	s.Lock()
+	defer s.Unlock()
+	entry, exists := s.data[ip]
+	if !exists || time.Since(entry.LastReset) > time.Minute {
+		s.data[ip] = struct {
+			Count     int
+			LastReset time.Time
+		}{Count: 1, LastReset: time.Now()}
 		return true
 	}
-	return false
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
+	if entry.Count >= 100 { // Example limit
+		return false
 	}
-	return b
+	entry.Count++
+	s.data[ip] = entry
+	return true
 }
