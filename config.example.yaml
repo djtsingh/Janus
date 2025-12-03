@@ -1,0 +1,25 @@
+# Example Janus configuration file.
+desktop_iterations: 5000
+mobile_iterations: 5000
+desktop_difficulty: 8
+mobile_difficulty: 6
+whitelist_ua:
+  - chrome
+  - firefox
+  - safari
+  - edge
+whitelist_ips:
+  - 127.0.0.1
+  - ::1
+blacklisted_ips: []
+banned_geo_locations: []
+suspicion_threshold: 50
+suspicion_weights:
+  blacklisted_ip: 100
+  banned_geo: 100
+  tls_mismatch: 30
+  no_user_agent: 40
+  headless_browser: 50
+  missing_headers: 20
+  header_order_mismatch: 20
+  no_fingerprint: 30
