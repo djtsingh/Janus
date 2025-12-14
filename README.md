@@ -1,8 +1,7 @@
 # Janus
 
-> Janus is a small Go-based middleware and challenge system designed to mitigate automated/bot traffic by combining browser fingerprinting, lightweight proof-of-work/proof-of-render (PoW/PoR) challenges, JA3-like TLS fingerprinting, geo/IP reputation checks and JWT-based verification.
+Janus blends user-friendly protection with technical rigor: a lightweight middleware that transparently blocks automated traffic by combining client-side Proof‑of‑Render (canvas) and optional Proof‑of‑Work, browser fingerprinting, TLS/JA3‑style checks, IP/Geo reputation and configurable heuristics — then issues short‑lived JWTs so real users pass seamlessly. For non‑technical teams it means fewer CAPTCHAs and better conversion; for engineers it’s easy to integrate, fully configurable (difficulty, weights, whitelists), and works offline (GeoIP/Redis optional) so you can tune UX vs. attacker cost without heavy infra.
 
-This repository contains a server implementation (command `janus`) that integrates middleware protecting routes by issuing challenges and verifying client proofs.
 
 ## Features
 - Browser fingerprint collection endpoint (`/janus/fingerprint`).
