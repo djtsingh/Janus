@@ -1,4 +1,4 @@
-8# Janus 🚪🛡️
+## Janus 🚪🛡️
 
 Janus is a lightweight Go middleware designed to stop automated bots while preserving a smooth experience for real users. It combines client-side Proof‑of‑Render (PoR) and optional Proof‑of‑Work (PoW), browser fingerprinting, TLS-like fingerprint heuristics, IP/Geo reputation, and configurable scoring to decide whether to challenge a visitor — then issues short-lived JWT cookies so verified users pass through seamlessly.
 
