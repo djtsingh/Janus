@@ -36,3 +36,40 @@ jobs:
 
       - name: Build
         run: go build ./...
+
+  integration:
+    name: Integration Tests (manual)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        run: docker build -t janus:test .
+
+      - name: Run container
+        run: |
+          docker run -d --name janus-test -p 8080:8080 janus:test || docker ps -a
+
+      - name: Wait for server (sensor.js)
+        run: |
+          for i in {1..30}; do
+            if curl -k -sSf https://localhost:8080/sensor.js >/dev/null 2>&1; then
+              echo "server ready"; break
+            fi
+            sleep 1
+          done
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Run integration script
+        run: bash scripts/run_flow.sh
+
+      - name: Stop container
+        if: always()
+        run: docker stop janus-test || true
