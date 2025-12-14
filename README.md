@@ -1,4 +1,4 @@
-# Janus 🚪🛡️
+8# Janus 🚪🛡️
 
 Janus is a lightweight Go middleware designed to stop automated bots while preserving a smooth experience for real users. It combines client-side Proof‑of‑Render (PoR) and optional Proof‑of‑Work (PoW), browser fingerprinting, TLS-like fingerprint heuristics, IP/Geo reputation, and configurable scoring to decide whether to challenge a visitor — then issues short-lived JWT cookies so verified users pass through seamlessly.
 
@@ -91,7 +91,3 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for how 
 
 ## License
 See [LICENSE](LICENSE) — permissive.
-
-***
-If you'd like a trimmed README or a short README for the project homepage plus a long `docs/` folder, I can split this into `README.md` and `docs/` files next — tell me which style you prefer.
-*** End Patch
