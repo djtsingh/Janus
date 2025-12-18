@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: janus-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+  janus:
+    build: .
+    container_name: janus-server
+    depends_on:
+      - redis
+    environment:
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
+      - ./cert.pem:/app/cert.pem:ro
+      - ./key.pem:/app/key.pem:ro
+    command: ["/app/janus"]

@@ -44,4 +44,6 @@ type Challenge struct {
 	Nonce      string
 	Iterations int
 	Seed       string
+	Type       string // "pow", "image", "logic", etc.
+	Difficulty int    // Number of zero bits or challenge difficulty
 }

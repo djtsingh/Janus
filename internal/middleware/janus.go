@@ -19,7 +19,7 @@ import (
 	"janus/internal/challenge"
 	"janus/internal/config"
 	"janus/internal/handlers"
-	"janus/internal/ratelimit"
+	"janus/internal/store"
 	"janus/internal/types"
 
 	"github.com/go-chi/chi/v5"
@@ -97,16 +97,22 @@ func JanusMiddleware(next http.Handler) http.Handler {
 		}
 	})
 
-	rlStore := ratelimit.NewStore(loadedConfig)
+	// Initialize Redis-backed store for rate limiting
+	redisAddr := loadedConfig.RedisAddr
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	redisStore := store.New(redisAddr)
+	rateLimit := loadedConfig.RateLimit.RequestsPerMinute
+	if rateLimit == 0 {
+		rateLimit = 60
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clientIP := getClientIP(r)
 		log.Printf("Request: %s, Method: %s, IP: %s, UA: %s", r.URL.Path, r.Method, clientIP, r.Header.Get("User-Agent"))
 
-		// --- CORRECTED LOGIC ---
-
 		// 1. Immediately handle API and asset requests for the challenge process.
-		// These paths must be exempt from the main verification checks.
 		if strings.HasPrefix(r.URL.Path, "/janus/") {
 			log.Printf("Serving Janus API endpoint: %s", r.URL.Path)
 			janusRouter.ServeHTTP(w, r)
@@ -114,13 +120,16 @@ func JanusMiddleware(next http.Handler) http.Handler {
 		}
 		if r.URL.Path == "/sensor.js" {
 			log.Printf("Serving sensor.js asset")
-			// Explicitly serve the file to prevent middleware loops.
 			http.ServeFile(w, r, "assets/sensor.js")
 			return
 		}
 
-		// 2. Apply rate limiting to all other requests.
-		if !rlStore.Allow(clientIP) {
+		// 2. Apply Redis-based rate limiting to all other requests.
+		limited, err := redisStore.IsRateLimited(clientIP, rateLimit)
+		if err != nil {
+			log.Printf("Redis rate limit error for %s: %v", clientIP, err)
+		}
+		if limited {
 			log.Printf("Rate limit exceeded for %s", clientIP)
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
@@ -134,7 +143,6 @@ func JanusMiddleware(next http.Handler) http.Handler {
 		}
 
 		// 4. If we reach here, the user is NOT verified. Issue the challenge.
-		// We can still log the suspicion score for analytics, but the outcome is the same.
 		suspicious, score := isSuspicious(r, loadedConfig)
 		log.Printf("Unverified user. Suspicious: %v, Score: %d. Issuing challenge.", suspicious, score)
 		issueChallenge(w, r)
@@ -408,7 +416,15 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chal, zeroBits := challenge.GenerateChallenge(loadedConfig, fp.IsMobile)
+	// TODO: Fetch user history from Redis/session (stubbed as 0 for now)
+	userHistory := 0
+	// Calculate risk score (reuse suspicion score logic)
+	suspicious, riskScore := isSuspicious(r, loadedConfig)
+	if suspicious {
+		log.Printf("handleChallenge: User %s is suspicious, risk score %d", clientIP, riskScore)
+	}
+
+	chal, _ := challenge.GenerateChallenge(loadedConfig, fp.IsMobile, riskScore, userHistory)
 	if chal == nil {
 		log.Printf("handleChallenge: Failed to generate challenge for IP %s", clientIP)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -428,9 +444,10 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 		"iterations": chal.Iterations,
 		"seed":       chal.Seed,
 		"clientIP":   clientIP,
-		"zeroBits":   zeroBits,
+		"type":       chal.Type,
+		"difficulty": chal.Difficulty,
 	}
-	log.Printf("handleChallenge: Issued challenge for IP %s, nonce %s, zeroBits %d", clientIP, chal.Nonce, zeroBits)
+	log.Printf("handleChallenge: Issued challenge for IP %s, nonce %s, type %s, difficulty %d", clientIP, chal.Nonce, chal.Type, chal.Difficulty)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("handleChallenge: Failed to encode response for IP %s: %v", clientIP, err)

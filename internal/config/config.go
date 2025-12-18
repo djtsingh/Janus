@@ -18,10 +18,15 @@ type JanusConfig struct {
 	BannedGeoLocations []string       `yaml:"banned_geo_locations"`
 	SuspicionThreshold int            `yaml:"suspicion_threshold"`
 	SuspicionWeights   map[string]int `yaml:"suspicion_weights"`
+	RedisAddr          string         `yaml:"redis_addr"`
+	RateLimit          struct {
+		RequestsPerMinute int `yaml:"requests_per_minute"`
+		Burst             int `yaml:"burst"`
+	} `yaml:"rate_limit"`
 }
 
 func DefaultConfig() *JanusConfig {
-	return &JanusConfig{
+	cfg := &JanusConfig{
 		DesktopIterations:  5000,
 		MobileIterations:   5000,
 		DesktopDifficulty:  8,
@@ -41,7 +46,11 @@ func DefaultConfig() *JanusConfig {
 			"header_order_mismatch": 20,
 			"no_fingerprint":        30,
 		},
+		RedisAddr: "localhost:6379",
 	}
+	cfg.RateLimit.RequestsPerMinute = 60
+	cfg.RateLimit.Burst = 10
+	return cfg
 }
 
 func LoadConfig(path string) (*JanusConfig, error) {

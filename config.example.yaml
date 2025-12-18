@@ -23,3 +23,8 @@ suspicion_weights:
   missing_headers: 20
   header_order_mismatch: 20
   no_fingerprint: 30
+
+redis_addr: "redis:6379"
+rate_limit:
+  requests_per_minute: 60
+  burst: 10

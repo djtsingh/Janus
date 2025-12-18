@@ -67,13 +67,36 @@ async function collectFingerprint() {
         const challenge = await response.json();
         console.log('collectFingerprint: Received challenge: ' + JSON.stringify(challenge));
 
-        // Compute hashcash proof
-        const { nonce, iterations, seed, clientIP, zeroBits } = challenge;
-        const timestamp = new Date().toISOString();
+        // Show challenge type in UI
+        const challengeUI = document.getElementById('challenge-ui');
+        if (challenge.type === 'image') {
+            challengeUI.innerHTML = '<b>Image Puzzle:</b> Click the cat image to continue.<br><img id="cat-img" src="https://cataas.com/cat?width=120" style="cursor:pointer;max-width:120px;">';
+            document.getElementById('cat-img').onclick = async function() {
+                await verifyProof('image-solved');
+            };
+            return;
+        } else if (challenge.type === 'logic') {
+            challengeUI.innerHTML = '<b>Logic Question:</b> What is 2 + 2? <input id="logic-answer" type="text" size="4"> <button id="logic-btn">Submit</button>';
+            document.getElementById('logic-btn').onclick = async function() {
+                const answer = document.getElementById('logic-answer').value;
+                if (answer.trim() === '4') {
+                    await verifyProof('logic-4');
+                } else {
+                    alert('Try again!');
+                }
+            };
+            return;
+        } else if (challenge.difficulty === 0) {
+            challengeUI.innerHTML = '<b>Invisible Challenge:</b> (No action needed, verifying...)';
+        } else {
+            challengeUI.innerHTML = '<b>Proof-of-Work Challenge:</b> Solving...';
+        }
 
+        // Compute hashcash proof (for pow/invisible)
+        const { nonce, iterations, seed, clientIP, difficulty } = challenge;
+        const timestamp = new Date().toISOString();
         let proof;
         const maxIterations = Math.min(iterations, isMobile ? 1000 : 5000);
-        
         for (let i = 0; i < maxIterations; i++) {
             proof = `${nonce}|${i}|${timestamp}|${clientIP}|${seed}`;
             if (!isMobile) {
@@ -81,7 +104,7 @@ async function collectFingerprint() {
             }
             const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(proof));
             const hashArray = new Uint8Array(hash);
-            if (hasLeadingZeroBits(hashArray, zeroBits)) {
+            if (hasLeadingZeroBits(hashArray, difficulty)) {
                 console.log('collectFingerprint: Computed proof: ' + proof);
                 break;
             }
@@ -89,20 +112,22 @@ async function collectFingerprint() {
                 throw new Error('Failed to compute valid proof within iteration limit');
             }
         }
+        await verifyProof(proof);
 
-        // Verify proof
-        console.log('collectFingerprint: Sending proof to /janus/verify: ' + proof);
-        response = await fetch('/janus/verify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ nonce, proof })
-        });
-        if (!response.ok) throw new Error('Verification failed: ' + response.status);
-        const verifyResult = await response.json();
-        if (verifyResult.status !== 'success') throw new Error('Verification status not success');
-
-        console.log('collectFingerprint: Verification successful');
-        window.location.href = '/';
+        async function verifyProof(proofVal) {
+            // Verify proof
+            console.log('collectFingerprint: Sending proof to /janus/verify: ' + proofVal);
+            let response = await fetch('/janus/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nonce, proof: proofVal })
+            });
+            if (!response.ok) throw new Error('Verification failed: ' + response.status);
+            const verifyResult = await response.json();
+            if (verifyResult.status !== 'success') throw new Error('Verification status not success');
+            console.log('collectFingerprint: Verification successful');
+            window.location.href = '/';
+        }
     } catch (error) {
         console.error('collectFingerprint: Error in fingerprint/challenge flow: ' + error.message);
         document.getElementById('status').textContent = 'Verification failed, please refresh to try again.';

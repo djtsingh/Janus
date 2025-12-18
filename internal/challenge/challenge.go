@@ -16,7 +16,9 @@ import (
 
 // GenerateChallenge creates a challenge for desktop (PoR) or mobile (PoW) clients.
 // Returns a Challenge struct and the number of leading zero bits required.
-func GenerateChallenge(cfg *config.JanusConfig, isMobile bool) (*types.Challenge, int) {
+// GenerateChallenge creates a challenge with adaptive difficulty and type.
+// riskScore: 0 (low) to 100+ (high). history: number of successful verifications.
+func GenerateChallenge(cfg *config.JanusConfig, isMobile bool, riskScore int, history int) (*types.Challenge, int) {
 	nonce, err := generateNonce()
 	if err != nil {
 		log.Printf("GenerateChallenge: Failed to generate nonce: %v", err)
@@ -27,17 +29,37 @@ func GenerateChallenge(cfg *config.JanusConfig, isMobile bool) (*types.Challenge
 		log.Printf("GenerateChallenge: Failed to generate seed: %v", err)
 		return nil, 0
 	}
-	iterations := cfg.DesktopIterations
-	zeroBits := cfg.DesktopDifficulty
+	// Adaptive difficulty: lower for low risk/history, higher for high risk/new users
+	baseIterations := cfg.DesktopIterations
+	baseDifficulty := cfg.DesktopDifficulty
+	challengeType := "pow"
 	if isMobile {
-		iterations = cfg.MobileIterations
-		zeroBits = cfg.MobileDifficulty
+		baseIterations = cfg.MobileIterations
+		baseDifficulty = cfg.MobileDifficulty
+	}
+	// Example: If riskScore < 20 and history > 2, make invisible (difficulty 0)
+	difficulty := baseDifficulty
+	if riskScore < 20 && history > 2 {
+		difficulty = 0
+	} else if riskScore > 80 {
+		difficulty = baseDifficulty + 2 // Harder for high risk
+	}
+	// Example: Custom challenge type for high risk
+	if riskScore > 60 {
+		// Alternate between types for demo; in real use, randomize or use config
+		if riskScore%2 == 0 {
+			challengeType = "image"
+		} else {
+			challengeType = "logic"
+		}
 	}
 	return &types.Challenge{
 		Nonce:      nonce,
-		Iterations: iterations,
+		Iterations: baseIterations,
 		Seed:       seed,
-	}, zeroBits
+		Type:       challengeType,
+		Difficulty: difficulty,
+	}, difficulty
 }
 
 // VerifyChallenge validates the client's proof for PoR (desktop) or PoW (mobile).
