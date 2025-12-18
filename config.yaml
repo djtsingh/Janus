@@ -1,6 +1,7 @@
-suspicion_threshold: 50
+suspicion_threshold: 10
 suspicion_weights:
   blacklisted_ip: 100
+  blacklisted_ip: ["127.0.0.1", "::1"]
   banned_geo: 80
   tls_mismatch: 30
   no_user_agent: 40
@@ -9,8 +10,8 @@ suspicion_weights:
   header_order_mismatch: 40
   no_fingerprint: 30
 blacklisted_ips: []
-whitelist_ips: ["127.0.0.1", "::1"]
-whitelist_ua: ["Chrome/"]
+# whitelist_ips: ["127.0.0.1", "::1"]
+# whitelist_ua: ["Chrome/"]
 banned_geo_locations: []
 redis_addr: "redis:6379"
 rate_limit:
