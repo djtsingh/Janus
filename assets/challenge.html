@@ -9,7 +9,6 @@
     <p id="status">Collecting fingerprint and processing challenge...</p>
     <div id="challenge-ui" style="margin-top:2em;"></div>
     <script>
-        // Update status based on console logs
         console.log = (function (origLog) {
             return function (message) {
                 origLog.apply(console, arguments);

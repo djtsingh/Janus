@@ -28,11 +28,8 @@ func New(redisAddr string) *Store {
 	rdb := redis.NewClient(&redis.Options{
 		Addr: redisAddr,
 	})
-	// We no longer need the background cleanup goroutine for visitors.
 	return &Store{rdb: rdb}
 }
-
-// --- Session Methods (No changes here) ---
 
 func (st *Store) GetSession(token string) (*Session, bool) {
 	key := "session:" + token
@@ -68,34 +65,23 @@ func (st *Store) CreateNonce(ttl time.Duration) (string, error) {
 	return nonce, err
 }
 
-// ValidateNonce checks if a nonce exists and immediately deletes it to prevent reuse.
 func (st *Store) ValidateNonce(nonce string) bool {
 	key := "nonce:" + nonce
-	// GETDEL is an atomic get-and-delete operation.
-	// If the key exists, it's deleted and its value is returned. Otherwise, it returns an error.
 	err := st.rdb.GetDel(ctx, key).Err()
-	// If there's no error, the key existed and was deleted successfully.
 	return err == nil
 }
 
-// --- NEW: Rate Limiter Method using Redis ---
-
-// IsRateLimited checks if an identifier has exceeded a limit in the last minute.
 func (st *Store) IsRateLimited(identifier string, limit int) (bool, error) {
 	key := "ratelimit:" + identifier
 
-	// Use a pipeline to execute commands atomically and efficiently.
 	pipe := st.rdb.Pipeline()
-	// INCR returns the new value of the key after incrementing.
 	count := pipe.Incr(ctx, key)
-	// Set the key to expire in 1 minute, but only if it's a new key.
 	pipe.ExpireNX(ctx, key, 1*time.Minute)
 
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		return true, err // Fail closed (assume rate limited on error)
+		return true, err
 	}
 
-	// Check if the count for this minute has exceeded the limit.
 	return count.Val() > int64(limit), nil
 }

@@ -1,6 +1,5 @@
 const http = require('http');
 
-// This is a complete, valid HTML5 document to prevent browser "Quirks Mode".
 const htmlContent = `
 <!DOCTYPE html>
 <html lang="en">

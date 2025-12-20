@@ -36,7 +36,7 @@ func (s *Store) Allow(ip string) bool {
 		}{Count: 1, LastReset: time.Now()}
 		return true
 	}
-	if entry.Count >= 100 { // Example limit
+	if entry.Count >= 100 {
 		return false
 	}
 	entry.Count++

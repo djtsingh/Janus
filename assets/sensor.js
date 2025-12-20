@@ -1,10 +1,8 @@
-// static/sensor.js
 console.log('Starting sensor.js');
 
 async function collectFingerprint() {
     console.log('collectFingerprint: Starting fingerprint collection');
 
-    // Collect fingerprint data
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = 200;
@@ -49,7 +47,6 @@ async function collectFingerprint() {
     console.log('collectFingerprint: WebGL renderer: ' + fingerprint.webglRenderer);
 
     try {
-        // Send fingerprint
         console.log('collectFingerprint: Sending fingerprint to /janus/fingerprint');
         let response = await fetch('/janus/fingerprint', {
             method: 'POST',
@@ -60,14 +57,12 @@ async function collectFingerprint() {
 
         console.log('collectFingerprint: Fingerprint submitted successfully');
 
-        // Fetch challenge
         console.log('collectFingerprint: Fetching challenge from /janus/challenge');
         response = await fetch('/janus/challenge');
         if (!response.ok) throw new Error('Challenge fetch failed: ' + response.status);
         const challenge = await response.json();
         console.log('collectFingerprint: Received challenge: ' + JSON.stringify(challenge));
 
-        // Show challenge type in UI
         const challengeUI = document.getElementById('challenge-ui');
         if (challenge.type === 'image') {
             challengeUI.innerHTML = '<b>Image Puzzle:</b> Click the cat image to continue.<br><img id="cat-img" src="https://cataas.com/cat?width=120" style="cursor:pointer;max-width:120px;">';
@@ -92,7 +87,6 @@ async function collectFingerprint() {
             challengeUI.innerHTML = '<b>Proof-of-Work Challenge:</b> Solving...';
         }
 
-        // Compute hashcash proof (for pow/invisible)
         const { nonce, iterations, seed, clientIP, difficulty } = challenge;
         const timestamp = new Date().toISOString();
         let proof;
@@ -115,7 +109,6 @@ async function collectFingerprint() {
         await verifyProof(proof);
 
         async function verifyProof(proofVal) {
-            // Verify proof
             console.log('collectFingerprint: Sending proof to /janus/verify: ' + proofVal);
             let response = await fetch('/janus/verify', {
                 method: 'POST',

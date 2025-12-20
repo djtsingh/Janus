@@ -13,15 +13,12 @@ func HandleFingerprint(store *types.FingerprintStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var fp types.Fingerprint
 		if err := json.NewDecoder(r.Body).Decode(&fp); err != nil {
-			// ... function body
 			return
 		}
 
-		// ...
 		fp.ClientIP = getClientIP(r)
 
 		store.Lock()
-		// You must also change "data" to "Data" here
 		store.Data[fp.ClientIP] = fp
 		store.Unlock()
 
@@ -39,10 +36,8 @@ func getClientIP(r *http.Request) string {
 			return ip
 		}
 	}
-	// Handle IPv6 and IPv4 RemoteAddr (e.g., [::1]:60500 or 127.0.0.1:60500)
 	addr := r.RemoteAddr
 	if strings.HasPrefix(addr, "[") {
-		// IPv6: Extract IP before port
 		end := strings.LastIndex(addr, "]")
 		if end != -1 {
 			ip := addr[1:end]
@@ -51,7 +46,6 @@ func getClientIP(r *http.Request) string {
 			}
 		}
 	} else {
-		// IPv4: Split on colon
 		parts := strings.Split(addr, ":")
 		if len(parts) > 0 {
 			ip := strings.TrimSpace(parts[0])

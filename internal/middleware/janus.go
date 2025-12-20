@@ -1,4 +1,3 @@
-// internal/middleware/janus.go
 package middleware
 
 import (
@@ -27,7 +26,6 @@ import (
 	"github.com/oschwald/geoip2-golang/v2"
 )
 
-// Custom context key type to avoid collisions (SA1029)
 type contextKey string
 
 const (
@@ -59,7 +57,6 @@ var janusRouter *chi.Mux
 
 func init() {
 	janusRouter = chi.NewRouter()
-	// CORRECTED LINE:
 	janusRouter.Post("/janus/fingerprint", handlers.HandleFingerprint(fingerprintStore))
 	janusRouter.Get("/janus/challenge", handleChallenge)
 	janusRouter.Post("/janus/verify", handleVerify)
@@ -72,7 +69,6 @@ func init() {
 		log.Printf("init: GeoIP database load error: %v, geo checks disabled", err)
 	}
 
-	// Periodically clean up expired challenges
 	go func() {
 		for {
 			time.Sleep(1 * time.Minute)
@@ -97,7 +93,6 @@ func JanusMiddleware(next http.Handler) http.Handler {
 		}
 	})
 
-	// Initialize Redis-backed store for rate limiting
 	redisAddr := loadedConfig.RedisAddr
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
@@ -112,7 +107,6 @@ func JanusMiddleware(next http.Handler) http.Handler {
 		clientIP := getClientIP(r)
 		log.Printf("Request: %s, Method: %s, IP: %s, UA: %s", r.URL.Path, r.Method, clientIP, r.Header.Get("User-Agent"))
 
-		// 1. Immediately handle API and asset requests for the challenge process.
 		if strings.HasPrefix(r.URL.Path, "/janus/") {
 			log.Printf("Serving Janus API endpoint: %s", r.URL.Path)
 			janusRouter.ServeHTTP(w, r)
@@ -124,7 +118,6 @@ func JanusMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 2. Apply Redis-based rate limiting to all other requests.
 		limited, err := redisStore.IsRateLimited(clientIP, rateLimit)
 		if err != nil {
 			log.Printf("Redis rate limit error for %s: %v", clientIP, err)
@@ -135,14 +128,12 @@ func JanusMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// 3. Check if the user is ALREADY verified with a valid token. If so, let them pass.
 		if isVerified(r) {
 			log.Printf("Serving content for verified user %s", clientIP)
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// 4. If we reach here, the user is NOT verified. Issue the challenge.
 		suspicious, score := isSuspicious(r, loadedConfig)
 		log.Printf("Unverified user. Suspicious: %v, Score: %d. Issuing challenge.", suspicious, score)
 		issueChallenge(w, r)
@@ -200,7 +191,7 @@ func getJA3Fingerprint(r *http.Request) string {
 
 func isKnownBrowserJA3(ja3 string) bool {
 	known := []string{
-		"b2fa5d224d65e7c692fd46a0f52fce6b", // Chrome 140 (Windows)
+		"b2fa5d224d65e7c692fd46a0f52fce6b",
 		"771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27-17513,29-23-24,0",
 		"771,49195-49199-52393-52392-49196-49200-49161-49162-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-13-18-51-45-43-27,29-23-24,0",
 		"771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,0-23-65281-10-11-35-16-5-34-13-18-51-45-43-27-17513,29-23-24,0",
@@ -230,7 +221,6 @@ func isSuspicious(r *http.Request, cfg *config.JanusConfig) (bool, int) {
 	clientIP := getClientIP(r)
 	score := 0
 
-	// 1. Whitelist Check
 	uaLower := strings.ToLower(ua)
 	uaWhitelisted := false
 	for _, allowed := range cfg.WhitelistUA {
@@ -254,7 +244,6 @@ func isSuspicious(r *http.Request, cfg *config.JanusConfig) (bool, int) {
 		return false, 0
 	}
 
-	// 2. IP Reputation Analysis
 	for _, blacklistedIP := range cfg.BlacklistedIPs {
 		if strings.HasPrefix(blacklistedIP, clientIP) || strings.Contains(blacklistedIP, "/") {
 			_, ipNet, err := net.ParseCIDR(blacklistedIP)
@@ -293,14 +282,12 @@ func isSuspicious(r *http.Request, cfg *config.JanusConfig) (bool, int) {
 		log.Printf("isSuspicious: GeoIP database not loaded, skipping geo checks for %s", clientIP)
 	}
 
-	// 3. TLS/SSL Handshake Fingerprinting (JA3)
 	ja3Fingerprint := getJA3Fingerprint(r)
 	if ja3Fingerprint != "" && !isKnownBrowserJA3(ja3Fingerprint) {
 		score += cfg.SuspicionWeights["tls_mismatch"]
 		log.Printf("isSuspicious: Suspicious JA3 %s for IP %s, Score: %d", ja3Fingerprint, clientIP, score)
 	}
 
-	// 4. JA3 Mismatch (UA vs JA3)
 	if ja3Fingerprint != "" && ja3Fingerprint != "no-tls" && ja3Fingerprint != "unknown-ja3" {
 		if strings.Contains(uaLower, "firefox") && !strings.Contains(ja3Fingerprint, "49195") {
 			score += cfg.SuspicionWeights["tls_mismatch"]
@@ -308,7 +295,6 @@ func isSuspicious(r *http.Request, cfg *config.JanusConfig) (bool, int) {
 		}
 	}
 
-	// 5. HTTP Headers Inspection
 	if ua == "" || strings.Contains(uaLower, "curl") || strings.Contains(uaLower, "python") {
 		score += cfg.SuspicionWeights["no_user_agent"]
 		log.Printf("isSuspicious: Suspicious UA %s for IP %s, Score: %d", ua, clientIP, score)
@@ -335,7 +321,6 @@ func isSuspicious(r *http.Request, cfg *config.JanusConfig) (bool, int) {
 		log.Printf("isSuspicious: Missing expected headers for IP %s, Score: %d", clientIP, score)
 	}
 
-	// 6. DOM/API and Device Fingerprint Checks
 	fingerprintStore.RLock()
 	fp, hasFingerprint := fingerprintStore.Data[clientIP]
 	fingerprintStore.RUnlock()
@@ -416,9 +401,7 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Fetch user history from Redis/session (stubbed as 0 for now)
 	userHistory := 0
-	// Calculate risk score (reuse suspicion score logic)
 	suspicious, riskScore := isSuspicious(r, loadedConfig)
 	if suspicious {
 		log.Printf("handleChallenge: User %s is suspicious, risk score %d", clientIP, riskScore)
@@ -431,7 +414,6 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store challenge with expiration
 	challengeStore.Lock()
 	challengeStore.data[clientIP+chal.Nonce] = struct {
 		Challenge *types.Challenge
@@ -476,7 +458,6 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Retrieve challenge
 	challengeStore.RLock()
 	stored, exists := challengeStore.data[clientIP+req.Nonce]
 	challengeStore.RUnlock()
@@ -492,7 +473,6 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Clean up challenge
 	challengeStore.Lock()
 	delete(challengeStore.data, clientIP+req.Nonce)
 	challengeStore.Unlock()

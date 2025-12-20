@@ -13,23 +13,19 @@
         async function init() {
             const statusEl = document.getElementById("status");
 
-            // Step 1: Get nonce
             let nonceResp = await fetch("http://localhost:8080/nonce");
             let nonceData = await nonceResp.json();
             const nonce = nonceData.nonce;
             statusEl.innerText = "Nonce received: " + nonce;
 
-            // Step 2: Load sensor.js dynamically
             const script = document.createElement("script");
             script.src = "http://localhost:8080/sensor.js";
             document.body.appendChild(script);
 
-            // Wait a moment to let sensor.js post telemetry
             setTimeout(() => {
                 statusEl.innerText += "\nTelemetry should be sent. Try checking protected route.";
             }, 2000);
 
-            // Step 3: Setup button to check protected route
             document.getElementById("checkAccess").addEventListener("click", async () => {
                 const resp = await fetch("http://localhost:8080/protected", {
                     headers: { "X-Janus-Session": nonce }

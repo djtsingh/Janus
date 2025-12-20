@@ -4,7 +4,6 @@ import (
 	"sync"
 )
 
-// This struct defines the data collected from the client's browser.
 type Fingerprint struct {
 	ClientIP      string `json:"client_ip"`
 	Plugins       string `json:"plugins"`
@@ -26,24 +25,20 @@ type Fingerprint struct {
 	IsMobile  bool   `json:"isMobile"`
 }
 
-// This struct holds the fingerprint data on the server.
 type FingerprintStore struct {
 	sync.RWMutex
-	// The "types." prefix is removed because we are already inside the "types" package.
 	Data map[string]Fingerprint
 }
 
-// This struct is used for decoding the verification request from the client.
 type Verification struct {
 	Proof string `json:"proof"`
 	Nonce string `json:"nonce"`
 }
 
-// This struct defines the components of a proof-of-work challenge.
 type Challenge struct {
 	Nonce      string
 	Iterations int
 	Seed       string
-	Type       string // "pow", "image", "logic", etc.
-	Difficulty int    // Number of zero bits or challenge difficulty
+	Type       string
+	Difficulty int
 }

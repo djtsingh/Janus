@@ -20,13 +20,11 @@ func main() {
 		http.ServeFile(w, r, "assets/sensor.js")
 	})
 
-	// Load certificates
 	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {
 		log.Fatalf("Failed to load certificates: %v. Generate with: openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes", err)
 	}
 
-	// HTTPS server
 	httpsServer := &http.Server{
 		Addr:    ":8080",
 		Handler: r,
@@ -36,7 +34,6 @@ func main() {
 		},
 	}
 
-	// HTTP server for redirect
 	httpServer := &http.Server{
 		Addr: ":8081",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +45,6 @@ func main() {
 		}),
 	}
 
-	// Start servers concurrently
 	go func() {
 		log.Println("Starting HTTP redirect server on :8081")
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
