@@ -28,3 +28,24 @@ redis_addr: "redis:6379"
 rate_limit:
   requests_per_minute: 60
   burst: 10
+
+# =============================================================================
+# TARPIT SETTINGS - Adaptive bot mitigation
+# =============================================================================
+# When enabled, suspicious requests face progressive delays and harder challenges.
+# This makes scraping economically unfeasible while not affecting legitimate users.
+tarpit:
+  enabled: true                  # Enable/disable tarpit functionality
+  delay_per_score_ms: 50         # Delay in ms per suspicion point (score=40 → 2s delay)
+  max_delay_ms: 10000            # Maximum delay cap (10 seconds)
+  difficulty_multiplier: 4       # Extra PoW difficulty per risk tier
+  offender_memory_mins: 30       # How long to remember repeat offenders
+  repeat_penalty: 2              # Extra difficulty added per repeat offense
+  
+# Risk tiers and their effects:
+# Score 0-9:   Base difficulty, no delay
+# Score 10-29: +4 difficulty, ~500ms delay
+# Score 30-49: +8 difficulty, ~1.5s delay
+# Score 50-79: +12 difficulty, ~3s delay  
+# Score 80+:   +16 difficulty, ~5s delay (capped at 10s)
+# Repeat offenders: additional +2 difficulty per offense, quadratic delay growth

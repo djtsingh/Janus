@@ -40,6 +40,21 @@ type ChallengeStore struct {
 	}
 }
 
+// OffenderRecord tracks repeat suspicious behavior for tarpit escalation
+type OffenderRecord struct {
+	Attempts   int       // number of suspicious requests
+	FirstSeen  time.Time // when first flagged
+	LastSeen   time.Time // most recent suspicious request
+	TotalScore int       // cumulative suspicion score
+	LastScore  int       // most recent suspicion score
+}
+
+// OffenderStore tracks IPs with suspicious behavior for tarpit escalation
+type OffenderStore struct {
+	sync.RWMutex
+	data map[string]*OffenderRecord
+}
+
 var (
 	fingerprintStore = &types.FingerprintStore{Data: make(map[string]types.Fingerprint)}
 
@@ -47,10 +62,13 @@ var (
 		Challenge *types.Challenge
 		Expires   time.Time
 	})}
-	loadedConfig *config.JanusConfig
-	configOnce   sync.Once
-	jwtSecret    = []byte("your-secure-random-secret-key-32bytes")
-	geoDB        *geoip2.Reader
+
+	// offenderStore tracks repeat offenders for progressive penalties
+	offenderStore = &OffenderStore{data: make(map[string]*OffenderRecord)}
+	loadedConfig  *config.JanusConfig
+	configOnce    sync.Once
+	jwtSecret     = []byte("your-secure-random-secret-key-32bytes")
+	geoDB         *geoip2.Reader
 )
 
 var janusRouter *chi.Mux
@@ -72,6 +90,7 @@ func init() {
 	go func() {
 		for {
 			time.Sleep(1 * time.Minute)
+			// Cleanup expired challenges
 			challengeStore.Lock()
 			for key, stored := range challengeStore.data {
 				if time.Now().After(stored.Expires) {
@@ -79,6 +98,19 @@ func init() {
 				}
 			}
 			challengeStore.Unlock()
+
+			// Cleanup old offender records
+			if loadedConfig != nil && loadedConfig.Tarpit.Enabled {
+				offenderStore.Lock()
+				expiry := time.Duration(loadedConfig.Tarpit.OffenderMemoryMins) * time.Minute
+				for ip, record := range offenderStore.data {
+					if time.Since(record.LastSeen) > expiry {
+						log.Printf("Tarpit: Clearing offender record for %s (expired after %v)", ip, expiry)
+						delete(offenderStore.data, ip)
+					}
+				}
+				offenderStore.Unlock()
+			}
 		}
 	}()
 }
@@ -120,9 +152,9 @@ func JanusMiddleware(next http.Handler) http.Handler {
 
 		limited, err := redisStore.IsRateLimited(clientIP, rateLimit)
 		if err != nil {
-			log.Printf("Redis rate limit error for %s: %v", clientIP, err)
-		}
-		if limited {
+			// Redis unavailable - fail open (allow request) for graceful degradation
+			log.Printf("Redis rate limit unavailable for %s: %v (allowing request)", clientIP, err)
+		} else if limited {
 			log.Printf("Rate limit exceeded for %s", clientIP)
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
@@ -403,15 +435,40 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 
 	userHistory := 0
 	suspicious, riskScore := isSuspicious(r, loadedConfig)
-	if suspicious {
+
+	// Track offenders and apply tarpit measures
+	var offender *OffenderRecord
+	if suspicious && loadedConfig.Tarpit.Enabled {
+		offender = recordOffender(clientIP, riskScore)
+		log.Printf("handleChallenge: User %s is suspicious, risk score %d, offense #%d",
+			clientIP, riskScore, offender.Attempts)
+
+		// Apply server-side delay (tarpit)
+		applyTarpitDelay(loadedConfig, clientIP, riskScore, offender)
+	} else if suspicious {
 		log.Printf("handleChallenge: User %s is suspicious, risk score %d", clientIP, riskScore)
+	} else {
+		// Check if this IP has prior offenses even if current request isn't suspicious
+		offender = getOffenderRecord(clientIP)
 	}
 
+	// Generate challenge with adaptive difficulty
 	chal, _ := challenge.GenerateChallenge(loadedConfig, fp.IsMobile, riskScore, userHistory)
 	if chal == nil {
 		log.Printf("handleChallenge: Failed to generate challenge for IP %s", clientIP)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+
+	// Override difficulty with tarpit-aware calculation
+	if loadedConfig.Tarpit.Enabled {
+		baseDifficulty := loadedConfig.DesktopDifficulty
+		if fp.IsMobile {
+			baseDifficulty = loadedConfig.MobileDifficulty
+		}
+		chal.Difficulty = calculateAdaptiveDifficulty(loadedConfig, baseDifficulty, riskScore, offender)
+		log.Printf("Tarpit: Adjusted difficulty for %s from base %d to %d (risk: %d)",
+			clientIP, baseDifficulty, chal.Difficulty, riskScore)
 	}
 
 	challengeStore.Lock()
@@ -467,8 +524,28 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, stored.Challenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig) {
-		log.Printf("handleVerify: Proof verification failed for IP %s, nonce %s, proof %s", clientIP, req.Nonce, req.Proof)
+	// Handle different challenge types
+	verified := false
+	switch stored.Challenge.Type {
+	case "image":
+		// Image challenge: user clicked the correct image
+		if req.Proof == "image-solved" {
+			verified = true
+			log.Printf("handleVerify: Image challenge solved for IP %s", clientIP)
+		}
+	case "logic":
+		// Logic challenge: user answered correctly
+		if req.Proof == "logic-4" {
+			verified = true
+			log.Printf("handleVerify: Logic challenge solved for IP %s", clientIP)
+		}
+	default:
+		// PoW challenge: verify computational proof
+		verified = challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, stored.Challenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig)
+	}
+
+	if !verified {
+		log.Printf("handleVerify: Proof verification failed for IP %s, nonce %s, proof %s, type %s", clientIP, req.Nonce, req.Proof, stored.Challenge.Type)
 		http.Error(w, "Verification failed", http.StatusUnauthorized)
 		return
 	}
@@ -476,6 +553,12 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	challengeStore.Lock()
 	delete(challengeStore.data, clientIP+req.Nonce)
 	challengeStore.Unlock()
+
+	// Graceful tarpit: reduce offender record on successful verification
+	// This rewards legitimate users who solve challenges
+	if loadedConfig.Tarpit.Enabled {
+		reduceOffenderScore(clientIP)
+	}
 
 	log.Printf("handleVerify: Proof verified for IP %s, nonce %s", clientIP, req.Nonce)
 
@@ -510,4 +593,146 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 func issueChallenge(w http.ResponseWriter, r *http.Request) {
 	log.Printf("issueChallenge: Serving HTML challenge page for %s", getClientIP(r))
 	http.ServeFile(w, r, "assets/challenge.html")
+}
+
+// ============================================================================
+// TARPIT FUNCTIONS - Adaptive bot mitigation through delays and difficulty
+// ============================================================================
+
+// recordOffender tracks suspicious behavior for progressive penalties
+func recordOffender(clientIP string, riskScore int) *OffenderRecord {
+	offenderStore.Lock()
+	defer offenderStore.Unlock()
+
+	record, exists := offenderStore.data[clientIP]
+	if !exists {
+		record = &OffenderRecord{
+			Attempts:   0,
+			FirstSeen:  time.Now(),
+			TotalScore: 0,
+		}
+		offenderStore.data[clientIP] = record
+	}
+
+	record.Attempts++
+	record.LastSeen = time.Now()
+	record.TotalScore += riskScore
+	record.LastScore = riskScore
+
+	log.Printf("Tarpit: Recorded offense for %s - attempts: %d, total_score: %d, last_score: %d",
+		clientIP, record.Attempts, record.TotalScore, record.LastScore)
+
+	return record
+}
+
+// getOffenderRecord retrieves the offender record without modifying it
+func getOffenderRecord(clientIP string) *OffenderRecord {
+	offenderStore.RLock()
+	defer offenderStore.RUnlock()
+	return offenderStore.data[clientIP]
+}
+
+// calculateTarpitDelay determines how long to delay response based on suspicion
+func calculateTarpitDelay(cfg *config.JanusConfig, riskScore int, offender *OffenderRecord) time.Duration {
+	if !cfg.Tarpit.Enabled {
+		return 0
+	}
+
+	// Base delay from risk score
+	delayMs := riskScore * cfg.Tarpit.DelayPerScoreMs
+
+	// Add delay for repeat offenders (exponential backoff)
+	if offender != nil && offender.Attempts > 1 {
+		repeatDelay := (offender.Attempts - 1) * (offender.Attempts - 1) * 500 // quadratic growth
+		delayMs += repeatDelay
+	}
+
+	// Cap the delay
+	if delayMs > cfg.Tarpit.MaxDelayMs {
+		delayMs = cfg.Tarpit.MaxDelayMs
+	}
+
+	return time.Duration(delayMs) * time.Millisecond
+}
+
+// calculateAdaptiveDifficulty computes PoW difficulty based on risk assessment
+func calculateAdaptiveDifficulty(cfg *config.JanusConfig, baseDifficulty, riskScore int, offender *OffenderRecord) int {
+	if !cfg.Tarpit.Enabled {
+		// Fallback to original simple logic
+		if riskScore > 80 {
+			return baseDifficulty + 2
+		}
+		return baseDifficulty
+	}
+
+	difficulty := baseDifficulty
+
+	// Risk tier scaling
+	switch {
+	case riskScore >= 80:
+		difficulty += cfg.Tarpit.DifficultyMultiplier * 4 // Extreme: +16 default
+	case riskScore >= 50:
+		difficulty += cfg.Tarpit.DifficultyMultiplier * 3 // High: +12 default
+	case riskScore >= 30:
+		difficulty += cfg.Tarpit.DifficultyMultiplier * 2 // Medium: +8 default
+	case riskScore >= 10:
+		difficulty += cfg.Tarpit.DifficultyMultiplier // Low: +4 default
+	}
+
+	// Repeat offender penalty
+	if offender != nil && offender.Attempts > 1 {
+		penalty := (offender.Attempts - 1) * cfg.Tarpit.RepeatPenalty
+		if penalty > 10 {
+			penalty = 10 // cap repeat penalty at +10
+		}
+		difficulty += penalty
+	}
+
+	// Absolute cap to prevent infinite computation
+	maxDifficulty := 28 // ~30+ seconds even on fast hardware
+	if difficulty > maxDifficulty {
+		difficulty = maxDifficulty
+	}
+
+	return difficulty
+}
+
+// applyTarpitDelay blocks the goroutine for the calculated delay
+func applyTarpitDelay(cfg *config.JanusConfig, clientIP string, riskScore int, offender *OffenderRecord) {
+	delay := calculateTarpitDelay(cfg, riskScore, offender)
+	if delay > 0 {
+		log.Printf("Tarpit: Delaying response to %s by %v (risk: %d, attempts: %d)",
+			clientIP, delay, riskScore, func() int {
+				if offender != nil {
+					return offender.Attempts
+				}
+				return 0
+			}())
+		time.Sleep(delay)
+	}
+}
+
+// reduceOffenderScore gracefully reduces penalties for users who successfully verify
+// This rewards legitimate users who may have been falsely flagged
+func reduceOffenderScore(clientIP string) {
+	offenderStore.Lock()
+	defer offenderStore.Unlock()
+
+	record, exists := offenderStore.data[clientIP]
+	if !exists {
+		return
+	}
+
+	// Halve the attempt count on successful verification (forgiveness)
+	record.Attempts = record.Attempts / 2
+	record.TotalScore = record.TotalScore / 2
+
+	// If they're back to clean slate, remove the record entirely
+	if record.Attempts <= 0 {
+		delete(offenderStore.data, clientIP)
+		log.Printf("Tarpit: Cleared offender record for %s after successful verification", clientIP)
+	} else {
+		log.Printf("Tarpit: Reduced offender score for %s - attempts now: %d, total_score: %d",
+			clientIP, record.Attempts, record.TotalScore)
+	}
 }

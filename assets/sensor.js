@@ -63,23 +63,93 @@ async function collectFingerprint() {
         const challenge = await response.json();
         console.log('collectFingerprint: Received challenge: ' + JSON.stringify(challenge));
 
+        // Extract challenge params early so they're available for all challenge types
+        const { nonce, iterations, seed, clientIP, difficulty } = challenge;
+
+        // Define verifyProof early so it's available for all challenge type handlers
+        async function verifyProof(proofVal) {
+            console.log('collectFingerprint: Sending proof to /janus/verify: ' + proofVal);
+            try {
+                let verifyResponse = await fetch('/janus/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ nonce, proof: proofVal })
+                });
+                if (!verifyResponse.ok) {
+                    if (verifyResponse.status === 400) {
+                        // Challenge expired - offer refresh
+                        document.getElementById('status').innerHTML = 
+                            'Challenge expired. <a href="javascript:location.reload()">Click here to retry</a>';
+                        return;
+                    }
+                    throw new Error('Verification failed: ' + verifyResponse.status);
+                }
+                const verifyResult = await verifyResponse.json();
+                if (verifyResult.status !== 'success') throw new Error('Verification status not success');
+                console.log('collectFingerprint: Verification successful');
+                window.location.href = '/';
+            } catch (err) {
+                console.error('collectFingerprint: Verification error:', err);
+                document.getElementById('status').innerHTML = 
+                    'Verification failed. <a href="javascript:location.reload()">Click here to retry</a>';
+            }
+        }
+
+        // Challenge timeout tracking (server expires in 5 minutes)
+        const challengeExpiry = Date.now() + (4.5 * 60 * 1000); // 4.5 min client-side (buffer)
+        function updateCountdown(element) {
+            const remaining = Math.max(0, Math.floor((challengeExpiry - Date.now()) / 1000));
+            if (remaining <= 0) {
+                element.innerHTML = '<span style="color:red">Challenge expired. <a href="javascript:location.reload()">Refresh to retry</a></span>';
+                return false;
+            }
+            const mins = Math.floor(remaining / 60);
+            const secs = remaining % 60;
+            element.textContent = `Time remaining: ${mins}:${secs.toString().padStart(2, '0')}`;
+            return true;
+        }
+
         const challengeUI = document.getElementById('challenge-ui');
         if (challenge.type === 'image') {
-            challengeUI.innerHTML = '<b>Image Puzzle:</b> Click the cat image to continue.<br><img id="cat-img" src="https://cataas.com/cat?width=120" style="cursor:pointer;max-width:120px;">';
+            challengeUI.innerHTML = `
+                <b>Image Puzzle:</b> Click the cat image to continue.<br>
+                <img id="cat-img" src="https://cataas.com/cat?width=120" style="cursor:pointer;max-width:120px;margin:10px 0;">
+                <div id="countdown" style="font-size:12px;color:#666;"></div>
+            `;
             document.getElementById('cat-img').onclick = async function() {
+                this.style.opacity = '0.5';
+                this.style.pointerEvents = 'none';
                 await verifyProof('image-solved');
             };
+            // Start countdown
+            const countdownEl = document.getElementById('countdown');
+            updateCountdown(countdownEl);
+            const countdownInterval = setInterval(() => {
+                if (!updateCountdown(countdownEl)) clearInterval(countdownInterval);
+            }, 1000);
             return;
         } else if (challenge.type === 'logic') {
-            challengeUI.innerHTML = '<b>Logic Question:</b> What is 2 + 2? <input id="logic-answer" type="text" size="4"> <button id="logic-btn">Submit</button>';
+            challengeUI.innerHTML = `
+                <b>Logic Question:</b> What is 2 + 2? 
+                <input id="logic-answer" type="text" size="4"> 
+                <button id="logic-btn">Submit</button>
+                <div id="countdown" style="font-size:12px;color:#666;margin-top:5px;"></div>
+            `;
             document.getElementById('logic-btn').onclick = async function() {
                 const answer = document.getElementById('logic-answer').value;
                 if (answer.trim() === '4') {
+                    this.disabled = true;
                     await verifyProof('logic-4');
                 } else {
                     alert('Try again!');
                 }
             };
+            // Start countdown
+            const countdownEl = document.getElementById('countdown');
+            updateCountdown(countdownEl);
+            const countdownInterval = setInterval(() => {
+                if (!updateCountdown(countdownEl)) clearInterval(countdownInterval);
+            }, 1000);
             return;
         } else if (challenge.difficulty === 0) {
             challengeUI.innerHTML = '<b>Invisible Challenge:</b> (No action needed, verifying...)';
@@ -87,7 +157,6 @@ async function collectFingerprint() {
             challengeUI.innerHTML = '<b>Proof-of-Work Challenge:</b> Solving...';
         }
 
-        const { nonce, iterations, seed, clientIP, difficulty } = challenge;
         const timestamp = new Date().toISOString();
         let proof;
         const maxIterations = Math.min(iterations, isMobile ? 1000 : 5000);
@@ -108,19 +177,6 @@ async function collectFingerprint() {
         }
         await verifyProof(proof);
 
-        async function verifyProof(proofVal) {
-            console.log('collectFingerprint: Sending proof to /janus/verify: ' + proofVal);
-            let response = await fetch('/janus/verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ nonce, proof: proofVal })
-            });
-            if (!response.ok) throw new Error('Verification failed: ' + response.status);
-            const verifyResult = await response.json();
-            if (verifyResult.status !== 'success') throw new Error('Verification status not success');
-            console.log('collectFingerprint: Verification successful');
-            window.location.href = '/';
-        }
     } catch (error) {
         console.error('collectFingerprint: Error in fingerprint/challenge flow: ' + error.message);
         document.getElementById('status').textContent = 'Verification failed, please refresh to try again.';

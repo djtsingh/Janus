@@ -23,6 +23,15 @@ type JanusConfig struct {
 		RequestsPerMinute int `yaml:"requests_per_minute"`
 		Burst             int `yaml:"burst"`
 	} `yaml:"rate_limit"`
+	// Tarpit settings for bot mitigation
+	Tarpit struct {
+		Enabled              bool `yaml:"enabled"`
+		DelayPerScoreMs      int  `yaml:"delay_per_score_ms"`    // ms delay per suspicion point
+		MaxDelayMs           int  `yaml:"max_delay_ms"`          // cap on delay
+		DifficultyMultiplier int  `yaml:"difficulty_multiplier"` // extra difficulty per risk tier
+		OffenderMemoryMins   int  `yaml:"offender_memory_mins"`  // how long to remember offenders
+		RepeatPenalty        int  `yaml:"repeat_penalty"`        // extra difficulty per repeat offense
+	} `yaml:"tarpit"`
 }
 
 func DefaultConfig() *JanusConfig {
@@ -50,6 +59,13 @@ func DefaultConfig() *JanusConfig {
 	}
 	cfg.RateLimit.RequestsPerMinute = 60
 	cfg.RateLimit.Burst = 10
+	// Tarpit defaults - aggressive bot mitigation
+	cfg.Tarpit.Enabled = true
+	cfg.Tarpit.DelayPerScoreMs = 50     // 50ms per suspicion point
+	cfg.Tarpit.MaxDelayMs = 10000       // max 10 second delay
+	cfg.Tarpit.DifficultyMultiplier = 4 // +4 difficulty per risk tier
+	cfg.Tarpit.OffenderMemoryMins = 30  // remember offenders for 30 mins
+	cfg.Tarpit.RepeatPenalty = 2        // +2 difficulty per repeat offense
 	return cfg
 }
 

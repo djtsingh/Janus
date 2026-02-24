@@ -1,0 +1,10 @@
+[15:55:57] 1. Submitting fingerprint (simulating desktop user)
+[15:55:57] 2. Requesting challenge
+[15:55:57] Challenge response: {"clientIP":"172.19.0.1","difficulty":8,"iterations":5000,"nonce":"PXgnpoKfhaeye+8len7bKA==","seed":"gJBA+A2c23w=","type":"pow"}
+[15:55:57] 3. Solving PoW challenge (difficulty 8)
+[15:55:57] Proof: PXgnpoKfhaeye+8len7bKA==|1|2026-02-24T15:55:57+00:00|127.0.0.1|test-seed|test-canvas
+[15:55:57] 4. Submitting proof
+Verification failed
+[15:55:57] 5. Checking for janus_token cookie (should be set if successful)
+[15:55:57] janus_token missing: FAIL
+[15:55:57] Test complete. See janus_test_log.txt for full details.
