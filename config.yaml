@@ -9,13 +9,13 @@ suspicion_weights:
   header_order_mismatch: 40
 
 # IP lists - localhost blacklisted to test bot workflow
-blacklisted_ips: ["127.0.0.1", "::1"]
-whitelist_ips: []
+blacklisted_ips: []
+whitelist_ips: ["127.0.0.1", "::1"]
 whitelist_ua: []
 banned_geo_locations: []
 
 # Redis connection (use localhost:6379 for local dev, redis:6379 for Docker)
-redis_addr: "redis:6379"
+redis_addr: "localhost:6379"
 
 # Rate limiting
 rate_limit:
