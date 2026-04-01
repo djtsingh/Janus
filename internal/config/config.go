@@ -23,6 +23,10 @@ type JanusConfig struct {
 		RequestsPerMinute int `yaml:"requests_per_minute"`
 		Burst             int `yaml:"burst"`
 	} `yaml:"rate_limit"`
+	// When true every request (except /health, /janus/*, /sensor.js) is challenged
+	// regardless of whether the user already holds a valid janus_token.
+	ChallengeAll bool `yaml:"challenge_all"`
+
 	// Tarpit settings for bot mitigation
 	Tarpit struct {
 		Enabled              bool `yaml:"enabled"`
@@ -44,6 +48,7 @@ func DefaultConfig() *JanusConfig {
 		WhitelistIPs:       []string{"127.0.0.1", "::1"},
 		BlacklistedIPs:     []string{},
 		BannedGeoLocations: []string{},
+		ChallengeAll:       false,
 		SuspicionThreshold: 50,
 		SuspicionWeights: map[string]int{
 			"blacklisted_ip":        100,

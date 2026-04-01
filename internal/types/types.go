@@ -24,6 +24,7 @@ type Fingerprint struct {
 	Timezone  string `json:"timezone"`
 	JSEnabled bool   `json:"jsEnabled"`
 	IsMobile  bool   `json:"isMobile"`
+	BotScore  int    `json:"bot_score"`
 }
 
 type FingerprintStore struct {
@@ -45,9 +46,19 @@ type Verification struct {
 }
 
 type Challenge struct {
-	Nonce      string
-	Iterations int
-	Seed       string
-	Type       string
-	Difficulty int
+	Nonce      string    `json:"nonce"`
+	Iterations int       `json:"iterations"`
+	Seed       string    `json:"seed"`
+	Type       string    `json:"type"`
+	Difficulty int       `json:"difficulty"`
+	IssuedAt   time.Time `json:"issued_at"`
+}
+
+type BehavioralData struct {
+	MouseMoves    int     `json:"mm"`
+	MouseEntropy  float64 `json:"me"`
+	KeyPresses    int     `json:"kp"`
+	ScrollEvents  int     `json:"se"`
+	TouchEvents   int     `json:"te"`
+	InteractionMs int64   `json:"im"`
 }

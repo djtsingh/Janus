@@ -99,8 +99,9 @@ func JanusMiddleware(next http.Handler) http.Handler {
 
 		// health endpoint bypasses verification
 		if r.URL.Path == "/health" {
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
+			_, _ = w.Write([]byte(`{"status":"ok","service":"janus"}`))
 			return
 		}
 
@@ -109,9 +110,9 @@ func JanusMiddleware(next http.Handler) http.Handler {
 			janusRouter.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/sensor.js" {
-			log.Printf("Serving sensor.js asset")
-			http.ServeFile(w, r, "assets/sensor.js")
+		if r.URL.Path == "/verify-ui" {
+			log.Printf("Serving verification UI asset")
+			http.ServeFile(w, r, "assets/verification-ui.html")
 			return
 		}
 
@@ -125,16 +126,45 @@ func JanusMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if isVerified(r) {
+		// Blacklisted IPs always get challenged, even with a valid token.
+		if isIPBlacklisted(clientIP, loadedConfig) {
+			log.Printf("Blacklisted IP %s - forcing challenge", clientIP)
+			issueChallenge(w, r)
+			return
+		}
+
+		// challenge_all: force a fresh challenge on every request, token or not.
+		if !loadedConfig.ChallengeAll && isVerified(r) {
 			log.Printf("Serving content for verified user %s", clientIP)
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		suspicious, score := isSuspicious(r, loadedConfig)
-		log.Printf("Unverified user. Suspicious: %v, Score: %d. Issuing challenge.", suspicious, score)
+		if loadedConfig.ChallengeAll {
+			log.Printf("challenge_all=true: challenging %s regardless of token (score: %d)", clientIP, score)
+		} else {
+			log.Printf("Unverified user. Suspicious: %v, Score: %d. Issuing challenge.", suspicious, score)
+		}
 		issueChallenge(w, r)
 	})
+}
+
+// isIPBlacklisted returns true if clientIP exactly matches any entry in the blacklist.
+func isIPBlacklisted(ip string, cfg *config.JanusConfig) bool {
+	for _, entry := range cfg.BlacklistedIPs {
+		if entry == ip {
+			return true
+		}
+		// CIDR range check
+		if strings.Contains(entry, "/") {
+			_, ipNet, err := net.ParseCIDR(entry)
+			if err == nil && ipNet.Contains(net.ParseIP(ip)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func getClientIP(r *http.Request) string {
@@ -341,6 +371,14 @@ func isSuspicious(r *http.Request, cfg *config.JanusConfig) (bool, int) {
 			score += cfg.SuspicionWeights["no_fingerprint"]
 			log.Printf("isSuspicious: Invalid WebGL renderer for IP %s, Score: %d", clientIP, score)
 		}
+		if fp.BotScore > 0 {
+			addition := fp.BotScore
+			if addition > 50 {
+				addition = 50
+			}
+			score += addition
+			log.Printf("isSuspicious: Client bot score %d for IP %s, Score: %d", fp.BotScore, clientIP, score)
+		}
 	}
 
 	suspicious := score >= cfg.SuspicionThreshold
@@ -462,8 +500,9 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 func handleVerify(w http.ResponseWriter, r *http.Request) {
 	clientIP := getClientIP(r)
 	var req struct {
-		Nonce string `json:"nonce"`
-		Proof string `json:"proof"`
+		Nonce string               `json:"nonce"`
+		Proof string               `json:"proof"`
+		B     types.BehavioralData  `json:"b"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("handleVerify: Invalid request body for IP %s: %v", clientIP, err)
@@ -493,25 +532,26 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle different challenge types
-	verified := false
-	switch storedChallenge.Type {
-	case "image":
-		// Image challenge: user clicked the correct image
-		if req.Proof == "image-solved" {
-			verified = true
-			log.Printf("handleVerify: Image challenge solved for IP %s", clientIP)
+	// Timing enforcement: reject proofs submitted too quickly (likely automated)
+	if !storedChallenge.IssuedAt.IsZero() {
+		elapsed := time.Since(storedChallenge.IssuedAt)
+		if elapsed < 1500*time.Millisecond {
+			log.Printf("handleVerify: Timing violation for %s - elapsed %v", clientIP, elapsed)
+			http.Error(w, "Verification failed", http.StatusUnauthorized)
+			return
 		}
-	case "logic":
-		// Logic challenge: user answered correctly
-		if req.Proof == "logic-4" {
-			verified = true
-			log.Printf("handleVerify: Logic challenge solved for IP %s", clientIP)
-		}
-	default:
-		// PoW challenge: verify computational proof
-		verified = challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, storedChallenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig)
 	}
+
+	// Behavioral validation: require evidence of human interaction
+	if !validateBehavioral(&req.B, fp.IsMobile) {
+		log.Printf("handleVerify: Behavioral check failed for %s - moves:%d entropy:%.3f time:%dms",
+			clientIP, req.B.MouseMoves, req.B.MouseEntropy, req.B.InteractionMs)
+		http.Error(w, "Verification failed", http.StatusUnauthorized)
+		return
+	}
+
+	// Verify computational proof of work (no trivial image/logic bypasses)
+	verified := challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, storedChallenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig, storedChallenge.Difficulty)
 
 	if !verified {
 		log.Printf("handleVerify: Proof verification failed for IP %s, nonce %s, proof %s, type %s", clientIP, req.Nonce, req.Proof, storedChallenge.Type)
@@ -559,9 +599,42 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// validateBehavioral checks that the verification request contains evidence of human interaction.
+func validateBehavioral(b *types.BehavioralData, isMobile bool) bool {
+	// Must have spent some time on the page
+	if b.InteractionMs < 800 {
+		return false
+	}
+	hasInteraction := b.MouseMoves > 0 || b.TouchEvents > 0 || b.ScrollEvents > 0 || b.KeyPresses > 0
+	// Zero interaction events + short time = automated
+	if !hasInteraction && b.InteractionMs < 3000 {
+		return false
+	}
+	// Desktop: check mouse movement quality if enough data points
+	if !isMobile && b.MouseMoves >= 5 && b.MouseEntropy < 0.01 {
+		return false
+	}
+	return true
+}
+
 func issueChallenge(w http.ResponseWriter, r *http.Request) {
-	log.Printf("issueChallenge: Serving HTML challenge page for %s", getClientIP(r))
-	http.ServeFile(w, r, "assets/challenge.html")
+	log.Printf("issueChallenge: Serving verification UI for %s", getClientIP(r))
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if data, err := os.ReadFile("assets/verification-ui.html"); err == nil {
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
+		return
+	}
+	// Inline fallback
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`<!DOCTYPE html>
+<html>
+<head><title>Verification</title></head>
+<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+<h1>🔐 Verification Required</h1>
+<p>Please solve the challenge...</p>
+</body>
+</html>`))
 }
 
 // ============================================================================

@@ -1,11 +1,8 @@
-version: '3.8'
 services:
   redis:
     image: redis:7-alpine
     container_name: janus-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
   janus:
     build: .
     container_name: janus-server
@@ -15,7 +12,8 @@ services:
       - REDIS_ADDR=redis:6379
       - JANUS_JWT_SECRET=${JANUS_JWT_SECRET}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8443:8080"
+      - "127.0.0.1:8080:8081"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro

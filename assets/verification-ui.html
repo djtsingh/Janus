@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Janus — Verifying</title>
+  <style>
+    /* ── Reset & Design Tokens ────────────────────────────────────────── */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --bg:        #060b13;
+      --surface:   #0a1019;
+      --border:    rgba(255,255,255,0.065);
+      --gold:      #c9973c;
+      --gold-dim:  rgba(201,151,60,0.12);
+      --gold-glow: rgba(201,151,60,0.28);
+      --blue:      #3ab2d8;
+      --text:      #dde2ef;
+      --muted:     #475068;
+      --success:   #38d87a;
+      --error:     #e05252;
+      --mono:      'SF Mono','Fira Code','Cascadia Code','Consolas',monospace;
+    }
+    html, body {
+      width: 100%; min-height: 100vh;
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
+      -webkit-font-smoothing: antialiased; overflow-x: hidden;
+    }
+
+    /* ── Atmospheric Background ───────────────────────────────────────── */
+    .bg-wrap { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+    .bg-grid {
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(201,151,60,0.028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(201,151,60,0.028) 1px, transparent 1px);
+      background-size: 52px 52px;
+      animation: grid-drift 55s linear infinite;
+    }
+    @keyframes grid-drift { to { background-position: 52px 52px; } }
+
+    .orb { position: absolute; border-radius: 50%; filter: blur(100px); pointer-events: none; }
+    .orb-l {
+      width: 720px; height: 720px; top: -260px; left: -260px;
+      background: radial-gradient(circle, rgba(201,151,60,0.18) 0%, transparent 68%);
+      animation: orb-breathe 14s ease-in-out infinite alternate;
+    }
+    .orb-r {
+      width: 620px; height: 620px; bottom: -200px; right: -200px;
+      background: radial-gradient(circle, rgba(58,178,216,0.15) 0%, transparent 68%);
+      animation: orb-breathe 19s ease-in-out infinite alternate-reverse;
+    }
+    @keyframes orb-breathe {
+      from { transform: scale(1);    opacity: 1;   }
+      to   { transform: scale(1.18); opacity: 0.6; }
+    }
+
+    /* ── Page Layout ──────────────────────────────────────────────────── */
+    .page {
+      position: relative; z-index: 1; min-height: 100vh;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 26px; padding: 36px 16px;
+    }
+
+    /* ── Janus Sigil ──────────────────────────────────────────────────── */
+    .sigil-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .sigil {
+      position: relative; width: 84px; height: 84px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .sigil-ring { position: absolute; border-radius: 50%; }
+    .sigil-ring-i {
+      inset: 0; border: 1.5px solid rgba(201,151,60,0.55);
+      animation: spin-cw 9s linear infinite;
+    }
+    .sigil-ring-i::before {
+      content: ''; position: absolute; top: -3.5px; left: calc(50% - 3px);
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--gold); box-shadow: 0 0 8px var(--gold-glow);
+    }
+    .sigil-ring-o {
+      inset: -11px; border: 1px solid rgba(58,178,216,0.2);
+      animation: spin-ccw 20s linear infinite;
+    }
+    .sigil-ring-o::before {
+      content: ''; position: absolute; bottom: -2.5px; left: calc(50% - 2.5px);
+      width: 5px; height: 5px; border-radius: 50%; background: var(--blue); opacity: 0.7;
+    }
+    @keyframes spin-cw  { to { transform: rotate(360deg);  } }
+    @keyframes spin-ccw { to { transform: rotate(-360deg); } }
+
+    .sigil-glyph {
+      position: absolute; inset: 12px;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .sigil-glyph svg { width: 100%; height: 100%; }
+
+    .wordmark { text-align: center; }
+    .wordmark h1 {
+      font-size: 14px; font-weight: 700;
+      letter-spacing: 0.44em; text-transform: uppercase; color: var(--gold);
+    }
+    .wordmark p {
+      font-size: 10px; letter-spacing: 0.22em;
+      text-transform: uppercase; color: var(--muted); margin-top: 4px;
+    }
+
+    /* ── Verification Card ────────────────────────────────────────────── */
+    .card {
+      width: 100%; max-width: 440px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; overflow: hidden;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.02),
+        0 32px 80px rgba(0,0,0,0.6),
+        0 0 120px var(--gold-dim);
+      animation: card-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes card-rise {
+      from { opacity: 0; transform: translateY(22px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .card-bar { height: 2px; background: linear-gradient(90deg, var(--gold) 0%, var(--blue) 100%); }
+    .card-body { padding: 24px 24px 20px; }
+
+    /* ── Live Status ──────────────────────────────────────────────────── */
+    .status-row {
+      display: flex; align-items: center; gap: 9px;
+      margin-bottom: 20px; min-height: 18px;
+    }
+    #janus-dot {
+      flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--gold); animation: dot-pulse 1.5s ease-in-out infinite;
+    }
+    #janus-dot.done  { background: var(--success); animation: none; }
+    #janus-dot.error { background: var(--error);   animation: none; }
+    @keyframes dot-pulse {
+      0%,100% { opacity: 1;   box-shadow: 0 0 0 0 var(--gold-glow); }
+      50%      { opacity: 0.4; box-shadow: 0 0 0 5px transparent; }
+    }
+    #janus-status {
+      font-size: 11.5px; font-family: var(--mono);
+      color: var(--muted); flex: 1; line-height: 1.4;
+    }
+
+    /* ── Steps ────────────────────────────────────────────────────────── */
+    .steps { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+    .step {
+      display: flex; align-items: center; gap: 14px;
+      padding: 11px 12px; border-radius: 9px; border: 1px solid transparent;
+      transition: background .35s ease, border-color .35s ease, opacity .35s ease;
+      opacity: 0.28;
+    }
+    .step.active  { opacity: 1; background: var(--gold-dim); border-color: rgba(201,151,60,0.17); }
+    .step.done    { opacity: 0.72; background: rgba(56,216,122,0.05); border-color: rgba(56,216,122,0.1); }
+    .step.errored { opacity: 1; background: rgba(224,82,82,0.07); border-color: rgba(224,82,82,0.2); }
+
+    .step-num {
+      width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; position: relative;
+      display: flex; align-items: center; justify-content: center;
+      border: 1.5px solid var(--muted);
+      font-size: 10px; font-weight: 700; font-family: var(--mono);
+      color: var(--muted); transition: all .3s;
+    }
+    .step-num .n  { display: block; }
+    .step-num .ck { display: none; font-size: 14px; }
+
+    .step.active .step-num { border-color: var(--gold); color: var(--gold); }
+    .step.active .step-num::after {
+      content: ''; position: absolute; inset: -5px; border-radius: 50%;
+      border: 1.5px solid transparent; border-top-color: var(--gold);
+      animation: spin-cw .85s linear infinite;
+    }
+    .step.done .step-num {
+      border-color: var(--success); background: rgba(56,216,122,0.1); color: var(--success);
+    }
+    .step.done   .step-num .n  { display: none; }
+    .step.done   .step-num .ck { display: block; }
+    .step.errored .step-num    { border-color: var(--error); color: var(--error); }
+
+    .step-text strong {
+      display: block; font-size: 12.5px; font-weight: 600;
+      letter-spacing: .03em; color: var(--text); margin-bottom: 2px; transition: color .3s;
+    }
+    .step-text span   { font-size: 11px; font-family: var(--mono); color: var(--muted); }
+    .step-text .detail { color: rgba(201,151,60,0.7); }
+
+    .step.done    .step-text strong { color: var(--success); }
+    .step.errored .step-text strong { color: var(--error); }
+
+    /* ── Footer ── */
+    .card-divider { height: 1px; background: var(--border); margin: 20px 0 16px; }
+    .card-footer  { display: flex; align-items: center; justify-content: space-between; }
+    .card-brand   { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
+    .card-brand b { color: rgba(201,151,60,0.6); font-weight: 600; }
+    .pbar         { width: 76px; height: 2px; border-radius: 2px; background: rgba(255,255,255,0.05); overflow: hidden; }
+    .pbar-fill    { height: 100%; width: 0%; border-radius: 2px; background: linear-gradient(90deg,var(--gold),var(--blue)); transition: width .6s cubic-bezier(.22,1,.36,1); }
+
+    /* ── Tagline ── */
+    .tagline { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: rgba(71,80,104,0.45); }
+
+    /* ── Responsive ── */
+    @media (max-width: 480px) {
+      .page { padding: 24px 12px; gap: 20px; }
+      .card-body { padding: 20px 16px 16px; }
+      .sigil { width: 68px; height: 68px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="bg-wrap" aria-hidden="true">
+    <div class="bg-grid"></div>
+    <div class="orb orb-l"></div>
+    <div class="orb orb-r"></div>
+  </div>
+
+  <main class="page">
+
+    <!-- Sigil & Wordmark -->
+    <div class="sigil-wrap">
+      <div class="sigil" aria-hidden="true">
+        <div class="sigil-ring sigil-ring-o"></div>
+        <div class="sigil-ring sigil-ring-i"></div>
+        <div class="sigil-glyph">
+          <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M26 11 A15 15 0 0 0 26 41" stroke="#c9973c" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+            <path d="M26 11 A15 15 0 0 1 26 41" stroke="#3ab2d8" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+            <line x1="26" y1="7" x2="26" y2="45" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
+            <circle cx="18" cy="23" r="2.2" fill="#c9973c"/>
+            <circle cx="34" cy="23" r="2.2" fill="#3ab2d8"/>
+            <path d="M11 45 L11 33 Q26 20 41 33 L41 45" stroke="rgba(201,151,60,0.22)" stroke-width="1.1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </div>
+      <div class="wordmark">
+        <h1>JANUS</h1>
+        <p>Gateway Security Protocol</p>
+      </div>
+    </div>
+
+    <!-- Verification Card -->
+    <div class="card" role="main" aria-label="Verification in progress">
+      <div class="card-bar"></div>
+      <div class="card-body">
+
+        <div class="status-row">
+          <span id="janus-dot" aria-hidden="true"></span>
+          <span id="janus-status" aria-live="polite">Initialising verification sequence&hellip;</span>
+        </div>
+
+        <ol class="steps" aria-label="Verification phases">
+          <li class="step active" id="step-0">
+            <div class="step-num" aria-hidden="true"><span class="n">01</span><span class="ck">&#10003;</span></div>
+            <div class="step-text">
+              <strong>Device Fingerprint</strong>
+              <span id="step-0-detail">Analysing browser &amp; hardware signals</span>
+            </div>
+          </li>
+          <li class="step" id="step-1">
+            <div class="step-num" aria-hidden="true"><span class="n">02</span><span class="ck">&#10003;</span></div>
+            <div class="step-text">
+              <strong>Proof of Work</strong>
+              <span id="step-1-detail">Cryptographic challenge computation</span>
+            </div>
+          </li>
+          <li class="step" id="step-2">
+            <div class="step-num" aria-hidden="true"><span class="n">03</span><span class="ck">&#10003;</span></div>
+            <div class="step-text">
+              <strong>Gateway Access</strong>
+              <span id="step-2-detail">Validating proof &amp; issuing session token</span>
+            </div>
+          </li>
+        </ol>
+
+        <div class="card-divider"></div>
+        <div class="card-footer">
+          <span class="card-brand">Protected by <b>Janus</b></span>
+          <div class="pbar"><div class="pbar-fill" id="janus-progress"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <p class="tagline">Automated requests will not pass</p>
+
+  </main>
+
+  <script>
+    // ── Behavioral Tracking ─────────────────────────────────────────────
+    var _b = { mv: [], ck: 0, kp: 0, sc: 0, tc: 0, t0: Date.now() };
+    document.addEventListener('mousemove', function(e) {
+      if (_b.mv.length < 200) _b.mv.push([e.clientX, e.clientY, Date.now()]);
+    });
+    document.addEventListener('click', function() { _b.ck++; });
+    document.addEventListener('keydown', function() { _b.kp++; });
+    document.addEventListener('scroll', function() { _b.sc++; });
+    document.addEventListener('touchstart', function() { _b.tc++; });
+
+    function getBehavioral() {
+      var mm = _b.mv.length;
+      var me = 0;
+      if (mm >= 3) {
+        var angles = [];
+        for (var i = 2; i < mm; i++) {
+          var dx1 = _b.mv[i-1][0] - _b.mv[i-2][0];
+          var dy1 = _b.mv[i-1][1] - _b.mv[i-2][1];
+          var dx2 = _b.mv[i][0] - _b.mv[i-1][0];
+          var dy2 = _b.mv[i][1] - _b.mv[i-1][1];
+          angles.push(Math.atan2(dy2, dx2) - Math.atan2(dy1, dx1));
+        }
+        var mean = angles.reduce(function(s, v) { return s + v; }, 0) / angles.length;
+        me = angles.reduce(function(s, v) { return s + (v - mean) * (v - mean); }, 0) / angles.length;
+      }
+      return {
+        mm: mm,
+        me: Math.round(me * 1000) / 1000,
+        kp: _b.kp,
+        se: _b.sc,
+        te: _b.tc,
+        im: Date.now() - _b.t0
+      };
+    }
+
+    // ── Environment Probes ──────────────────────────────────────────────
+    function probeEnv() {
+      var s = 0;
+      try { if (navigator.webdriver) s += 30; } catch(e) {}
+      try {
+        var keys = Object.keys(window);
+        for (var i = 0; i < keys.length; i++) { if (/^cdc_/.test(keys[i])) { s += 40; break; } }
+      } catch(e) {}
+      try {
+        if (document.__selenium_evaluate || document.__selenium_unwrapped ||
+            window._selenium || window.callSelenium || window.__fxdriver_unwrapped) s += 40;
+      } catch(e) {}
+      try { if (window.__playwright || window.__pw_manual) s += 40; } catch(e) {}
+      var isChromeUA = /Chrome\//.test(navigator.userAgent) && !/Edg\/|OPR\//.test(navigator.userAgent);
+      try { if (isChromeUA && !(window.chrome && window.chrome.runtime)) s += 15; } catch(e) {}
+      try { if (navigator.plugins.length === 0 && !/Firefox/i.test(navigator.userAgent)) s += 15; } catch(e) {}
+      try { if (!navigator.languages || navigator.languages.length === 0) s += 20; } catch(e) {}
+      try { if (window.outerWidth === 0 || window.outerHeight === 0) s += 25; } catch(e) {}
+      return s;
+    }
+
+    // ── UI Helpers ──────────────────────────────────────────────────────
+    var STEPS = ['step-0', 'step-1', 'step-2'];
+    var PCTS  = [33, 66, 100];
+
+    function el(id) { return document.getElementById(id); }
+
+    function setStep(idx) {
+      STEPS.forEach(function(id, i) {
+        var e = el(id); if (!e) return;
+        e.className = 'step' + (i < idx ? ' done' : i === idx ? ' active' : '');
+      });
+      var fill = el('janus-progress');
+      if (fill && PCTS[idx] != null) fill.style.width = PCTS[idx] + '%';
+    }
+
+    function completeStep(idx) {
+      var e = el(STEPS[idx]); if (e) e.className = 'step done';
+      var fill = el('janus-progress');
+      if (fill) fill.style.width = PCTS[idx] + '%';
+    }
+
+    function setStatus(text) {
+      var s = el('janus-status'); if (s) s.textContent = text;
+    }
+
+    function setDetail(stepIdx, text) {
+      var d = el('step-' + stepIdx + '-detail'); if (d) d.textContent = text;
+    }
+
+    function setDone() {
+      setStatus('Verification complete \u2014 granting access\u2026');
+      el('janus-dot').className = 'done';
+      STEPS.forEach(function(id) { var e = el(id); if (e) e.className = 'step done'; });
+      el('janus-progress').style.width = '100%';
+    }
+
+    function setError(msg) {
+      el('janus-dot').className = 'error';
+      setStatus(msg || 'Verification failed \u2014 refresh to retry');
+      STEPS.forEach(function(id) {
+        var e = el(id);
+        if (e && e.className.indexOf('active') !== -1) e.className = 'step errored';
+      });
+    }
+
+    // ── Canvas Fingerprint ──────────────────────────────────────────────
+    function getCanvasHash() {
+      try {
+        var c = document.createElement('canvas');
+        c.width = 220; c.height = 50;
+        var ctx = c.getContext('2d');
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillStyle = '#f60'; ctx.fillRect(120,1,62,20);
+        ctx.fillStyle = '#069'; ctx.font = '14px Arial';
+        ctx.fillText('Browser fingerprint', 2, 15);
+        ctx.fillStyle = 'rgba(102,126,234,0.7)';
+        ctx.fillText('Janus security', 4, 17);
+        return c.toDataURL();
+      } catch(e) { return 'canvas-error'; }
+    }
+
+    function getWebGL() {
+      try {
+        var gl = document.createElement('canvas').getContext('webgl');
+        return gl ? gl.getParameter(gl.RENDERER) : 'no-webgl';
+      } catch(e) { return 'no-webgl'; }
+    }
+
+    function getFonts() {
+      var test = ['Arial','Times New Roman','Helvetica','Georgia','Verdana'];
+      return test.filter(function(f) {
+        try { return document.fonts.check('12px "' + f + '"'); } catch(e) { return false; }
+      }).join(',');
+    }
+
+    function buildFingerprint() {
+      var isMobile = /Mobi|Android/i.test(navigator.userAgent);
+      var canvasHash = getCanvasHash();
+      return {
+        fingerprint: {
+          plugins: Array.from(navigator.plugins || []).map(function(p){return p.name;}).join(','),
+          hardware_concurrency: navigator.hardwareConcurrency || 0,
+          webdriver: !!navigator.webdriver,
+          chrome_exists: !!window.chrome,
+          canvas_hash: canvasHash,
+          screen_resolution: screen.width + 'x' + screen.height,
+          color_depth: screen.colorDepth || 24,
+          fonts: getFonts(),
+          webgl_renderer: getWebGL(),
+          ja3: 'unknown-ja3',
+          screen: { width: screen.width, height: screen.height },
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          jsEnabled: true,
+          isMobile: isMobile,
+          bot_score: probeEnv()
+        },
+        canvasHash: canvasHash,
+        isMobile: isMobile
+      };
+    }
+
+    // ── PoW Computation ─────────────────────────────────────────────────
+    function hasLeadingZeroBits(hash, zeroBits) {
+      var full = Math.floor(zeroBits / 8);
+      var extra = zeroBits % 8;
+      for (var i = 0; i < full; i++) { if (hash[i] !== 0) return false; }
+      if (extra > 0) { var mask = 0xFF << (8 - extra); return (hash[full] & mask) === 0; }
+      return true;
+    }
+
+    async function computePoW(nonce, seed, clientIP, difficulty, maxIter, isMobile, canvasHash) {
+      var timestamp = new Date().toISOString();
+      var enc = new TextEncoder();
+      var attempts = 0;
+      for (var i = 0; i < maxIter; i++) {
+        var proof = nonce + '|' + i + '|' + timestamp + '|' + clientIP + '|' + seed;
+        if (!isMobile) proof += '|' + canvasHash;
+        var buf = enc.encode(proof);
+        var hash = await crypto.subtle.digest('SHA-256', buf);
+        attempts++;
+        if (attempts % 100 === 0) {
+          setDetail(1, 'Hashing\u2026 attempt ' + attempts.toLocaleString() + ' of ' + maxIter.toLocaleString());
+        }
+        if (hasLeadingZeroBits(new Uint8Array(hash), difficulty)) {
+          return proof;
+        }
+      }
+      return null; // exhausted
+    }
+
+    // ── Main Verification Flow ──────────────────────────────────────────
+    async function run() {
+      // ── Phase 1: Fingerprint ───────────────────────────────
+      setStatus('Collecting device fingerprint\u2026');
+      var fp;
+      try {
+        fp = buildFingerprint();
+        var r = await fetch('/janus/fingerprint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(fp.fingerprint)
+        });
+        if (!r.ok) throw new Error('Fingerprint rejected (' + r.status + ')');
+        completeStep(0);
+        setStep(1);
+        setStatus('Fingerprint verified \u2014 generating challenge\u2026');
+      } catch(e) {
+        setError('Fingerprint failed: ' + e.message);
+        return;
+      }
+
+      // ── Phase 2: Challenge request ─────────────────────────
+      var ch;
+      try {
+        var cr = await fetch('/janus/challenge', { credentials: 'include' });
+        if (!cr.ok) throw new Error('Challenge request failed (' + cr.status + ')');
+        ch = await cr.json();
+      } catch(e) {
+        setError('Challenge request failed: ' + e.message);
+        return;
+      }
+
+      var nonce   = ch.nonce;
+      var seed    = ch.seed;
+      var cliIP   = ch.clientIP;
+      var diff    = ch.difficulty != null ? ch.difficulty : 8;
+      var maxIter = Math.min(ch.iterations || 5000, fp.isMobile ? 1500 : 5000);
+
+      // ── Phase 3: Solve challenge ───────────────────────────
+      // ── Proof of Work computation ──────────────────────────
+      setStatus('Computing proof of work\u2026');
+      setDetail(1, 'Starting hash computation\u2026');
+      var proof;
+      try {
+        proof = await computePoW(nonce, seed, cliIP, diff, maxIter, fp.isMobile, fp.canvasHash);
+        if (!proof) throw new Error('Could not find valid proof within ' + maxIter + ' attempts');
+      } catch(e) {
+        setError('Proof computation failed: ' + e.message);
+        return;
+      }
+
+      // ── Phase 4: Verify ────────────────────────────────────
+      completeStep(1);
+      setStep(2);
+      setStatus('Proof ready \u2014 contacting gateway\u2026');
+
+      try {
+        var vr = await fetch('/janus/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ nonce: nonce, proof: proof, b: getBehavioral() })
+        });
+
+        if (vr.status === 400) {
+          setError('Challenge expired \u2014 refreshing\u2026');
+          setTimeout(function(){ location.reload(); }, 2000);
+          return;
+        }
+        if (!vr.ok) throw new Error('Verification rejected (' + vr.status + ')');
+
+        var result = await vr.json();
+        if (result.status !== 'success') throw new Error('Unexpected response');
+
+        completeStep(2);
+        setDone();
+        setTimeout(function(){ window.location.href = '/'; }, 600);
+
+      } catch(e) {
+        setError('Gateway rejected the proof \u2014 ' + e.message);
+      }
+    }
+
+    // Start after DOM is ready
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', run);
+    } else {
+      run();
+    }
+  </script>
+
+</body>
+</html>

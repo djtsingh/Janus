@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y openssl ca-certificates curl && rm -rf 
 WORKDIR /app
 COPY --from=build /app/janus /app/janus
 COPY entrypoint.sh /app/entrypoint.sh
+COPY assets/ /app/assets/
 RUN chmod +x /app/entrypoint.sh
 RUN groupadd -r janus && useradd -r -g janus -d /app -s /sbin/nologin janus || true
 RUN chown -R janus:janus /app

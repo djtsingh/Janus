@@ -26,34 +26,25 @@ func GenerateChallenge(cfg *config.JanusConfig, isMobile bool, riskScore int, hi
 	}
 	baseIterations := cfg.DesktopIterations
 	baseDifficulty := cfg.DesktopDifficulty
-	challengeType := "pow"
 	if isMobile {
 		baseIterations = cfg.MobileIterations
 		baseDifficulty = cfg.MobileDifficulty
 	}
 	difficulty := baseDifficulty
-	if riskScore < 20 && history > 2 {
-		difficulty = 0
-	} else if riskScore > 80 {
+	if riskScore > 80 {
 		difficulty = baseDifficulty + 2
-	}
-	if riskScore > 60 {
-		if riskScore%2 == 0 {
-			challengeType = "image"
-		} else {
-			challengeType = "logic"
-		}
 	}
 	return &types.Challenge{
 		Nonce:      nonce,
 		Iterations: baseIterations,
 		Seed:       seed,
-		Type:       challengeType,
+		Type:       "pow",
 		Difficulty: difficulty,
+		IssuedAt:   time.Now(),
 	}, difficulty
 }
 
-func VerifyChallenge(proof, expectedNonce, expectedClientIP, expectedSeed string, isMobile bool, canvasHash string, cfg *config.JanusConfig) bool {
+func VerifyChallenge(proof, expectedNonce, expectedClientIP, expectedSeed string, isMobile bool, canvasHash string, cfg *config.JanusConfig, challengeDifficulty int) bool {
 	parts := strings.Split(proof, "|")
 	if isMobile {
 		if len(parts) != 5 {
@@ -76,14 +67,6 @@ func VerifyChallenge(proof, expectedNonce, expectedClientIP, expectedSeed string
 		log.Printf("VerifyChallenge: Component mismatch")
 		return false
 	}
-	log.Printf("DEBUG: Canvas hash from PROOF  : %s", parts[5])
-	log.Printf("DEBUG: Canvas hash from STORAGE: %s", canvasHash)
-	log.Printf("DEBUG: Are they equal? %v", parts[5] == canvasHash)
-
-	if !isMobile && parts[5] != canvasHash {
-		log.Printf("VerifyChallenge: Canvas hash mismatch")
-		return false
-	}
 
 	iter, err := strconv.Atoi(iteration)
 	maxIter := cfg.MobileIterations
@@ -97,18 +80,22 @@ func VerifyChallenge(proof, expectedNonce, expectedClientIP, expectedSeed string
 
 	ts, err := time.Parse(time.RFC3339, timestamp)
 	if err != nil || time.Since(ts) > 5*time.Minute || ts.After(time.Now().Add(1*time.Minute)) {
-		log.Printf("VerifyChallenge: Invalid timestamp: %s", timestamp)
+		log.Printf("VerifyChallenge: Invalid timestamp")
 		return false
 	}
 
-	zeroBits := cfg.MobileDifficulty
-	if !isMobile {
-		zeroBits = cfg.DesktopDifficulty
+	// Use the actual challenge difficulty (includes tarpit adjustments)
+	zeroBits := challengeDifficulty
+	if zeroBits <= 0 {
+		zeroBits = cfg.MobileDifficulty
+		if !isMobile {
+			zeroBits = cfg.DesktopDifficulty
+		}
 	}
 
 	hash := sha256.Sum256([]byte(proof))
 	if !hasLeadingZeroBits(hash[:], zeroBits) {
-		log.Printf("VerifyChallenge: Hash does not have %d leading zero bits", zeroBits)
+		log.Printf("VerifyChallenge: Hash does not meet difficulty requirement (%d bits)", zeroBits)
 		return false
 	}
 

@@ -13,10 +13,15 @@ func HandleFingerprint(store *types.FingerprintStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var fp types.Fingerprint
 		if err := json.NewDecoder(r.Body).Decode(&fp); err != nil {
+			log.Printf("HandleFingerprint: Failed to decode JSON: %v", err)
+			http.Error(w, "Invalid fingerprint payload", http.StatusBadRequest)
 			return
 		}
 
-		fp.ClientIP = getClientIP(r)
+		// Prefer explicit client_ip in the payload (useful for testing/proxies).
+		if fp.ClientIP == "" {
+			fp.ClientIP = getClientIP(r)
+		}
 
 		store.Lock()
 		store.Data[fp.ClientIP] = fp

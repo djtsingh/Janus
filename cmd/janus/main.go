@@ -19,6 +19,9 @@ func main() {
 	r.Get("/sensor.js", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "assets/sensor.js")
 	})
+	r.Get("/verify-ui", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "assets/verification-ui.html")
+	})
 	// Health endpoint (middleware will bypass verification for /health)
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
