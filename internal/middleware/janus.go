@@ -428,6 +428,7 @@ func isVerified(r *http.Request) bool {
 }
 
 func handleChallenge(w http.ResponseWriter, r *http.Request) {
+	requestStart := time.Now() // record before any tarpit delay
 	clientIP := getClientIP(r)
 	fingerprintStore.RLock()
 	fp, hasFingerprint := fingerprintStore.Data[clientIP]
@@ -487,6 +488,9 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// Backdate IssuedAt to before the tarpit delay so timing checks are accurate
+	chal.IssuedAt = requestStart
 
 	// Persist challenge in Redis with 5 minute TTL so it survives restarts and supports multiple instances
 	if err := redisStoreGlobal.SetChallenge(clientIP, chal.Nonce, chal, 5*time.Minute); err != nil {
@@ -632,6 +636,7 @@ func validateBehavioral(b *types.BehavioralData, isMobile bool) bool {
 }
 
 func handleInteractiveChallenge(w http.ResponseWriter, r *http.Request) {
+	requestStart := time.Now() // record before any tarpit delay
 	clientIP := getClientIP(r)
 	fingerprintStore.RLock()
 	_, hasFingerprint := fingerprintStore.Data[clientIP]
@@ -655,6 +660,8 @@ func handleInteractiveChallenge(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	// Backdate IssuedAt to before the tarpit delay so timing checks are accurate
+	chal.IssuedAt = requestStart
 
 	if err := redisStoreGlobal.SetInteractiveChallenge(clientIP, chal.Nonce, chal, 5*time.Minute); err != nil {
 		log.Printf("handleInteractiveChallenge: Redis persist failed for IP %s: %v", clientIP, err)
