@@ -117,6 +117,36 @@ func (st *Store) DeleteChallenge(clientIP, nonce string) error {
 	return st.rdb.Del(ctx, key).Err()
 }
 
+// Interactive challenge persistence
+func (st *Store) SetInteractiveChallenge(clientIP, nonce string, challenge interface{}, ttl time.Duration) error {
+	key := fmt.Sprintf("interactive:%s:%s", clientIP, nonce)
+	data, err := json.Marshal(challenge)
+	if err != nil {
+		return err
+	}
+	return st.rdb.SetEX(ctx, key, data, ttl).Err()
+}
+
+func (st *Store) GetInteractiveChallenge(clientIP, nonce string, out interface{}) (bool, error) {
+	key := fmt.Sprintf("interactive:%s:%s", clientIP, nonce)
+	data, err := st.rdb.Get(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (st *Store) DeleteInteractiveChallenge(clientIP, nonce string) error {
+	key := fmt.Sprintf("interactive:%s:%s", clientIP, nonce)
+	return st.rdb.Del(ctx, key).Err()
+}
+
 // Offender persistence
 func (st *Store) SetOffender(clientIP string, offender interface{}, ttl time.Duration) error {
 	key := fmt.Sprintf("offender:%s", clientIP)

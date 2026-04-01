@@ -51,6 +51,8 @@ func init() {
 	janusRouter.Post("/janus/fingerprint", handlers.HandleFingerprint(fingerprintStore))
 	janusRouter.Get("/janus/challenge", handleChallenge)
 	janusRouter.Post("/janus/verify", handleVerify)
+	janusRouter.Get("/janus/interactive-challenge", handleInteractiveChallenge)
+	janusRouter.Post("/janus/verify-interactive", handleVerifyInteractive)
 }
 
 func init() {
@@ -472,6 +474,18 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 		chal.Difficulty = calculateAdaptiveDifficulty(loadedConfig, baseDifficulty, riskScore, offender)
 		log.Printf("Tarpit: Adjusted difficulty for %s from base %d to %d (risk: %d)",
 			clientIP, baseDifficulty, chal.Difficulty, riskScore)
+
+		// Scale iterations so the challenge is always solvable.
+		// Need ~2^difficulty attempts on average; provide 4× margin.
+		if chal.Difficulty > baseDifficulty {
+			minIter := 1 << uint(chal.Difficulty+2) // 4× expected
+			if chal.Iterations < minIter {
+				chal.Iterations = minIter
+			}
+			if chal.Iterations > 500000 {
+				chal.Iterations = 500000
+			}
+		}
 	}
 
 	// Persist challenge in Redis with 5 minute TTL so it survives restarts and supports multiple instances
@@ -502,7 +516,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Nonce string               `json:"nonce"`
 		Proof string               `json:"proof"`
-		B     types.BehavioralData  `json:"b"`
+		B     types.BehavioralData `json:"b"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("handleVerify: Invalid request body for IP %s: %v", clientIP, err)
@@ -551,7 +565,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Verify computational proof of work (no trivial image/logic bypasses)
-	verified := challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, storedChallenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig, storedChallenge.Difficulty)
+	verified := challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, storedChallenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig, storedChallenge.Difficulty, storedChallenge.Iterations)
 
 	if !verified {
 		log.Printf("handleVerify: Proof verification failed for IP %s, nonce %s, proof %s, type %s", clientIP, req.Nonce, req.Proof, storedChallenge.Type)
@@ -615,6 +629,148 @@ func validateBehavioral(b *types.BehavioralData, isMobile bool) bool {
 		return false
 	}
 	return true
+}
+
+func handleInteractiveChallenge(w http.ResponseWriter, r *http.Request) {
+	clientIP := getClientIP(r)
+	fingerprintStore.RLock()
+	_, hasFingerprint := fingerprintStore.Data[clientIP]
+	fingerprintStore.RUnlock()
+	if !hasFingerprint {
+		log.Printf("handleInteractiveChallenge: No fingerprint for IP %s", clientIP)
+		http.Error(w, "No fingerprint", http.StatusBadRequest)
+		return
+	}
+
+	// Tarpit delay for suspicious users
+	suspicious, riskScore := isSuspicious(r, loadedConfig)
+	if suspicious && loadedConfig.Tarpit.Enabled {
+		offender := recordOffender(clientIP, riskScore)
+		applyTarpitDelay(loadedConfig, clientIP, riskScore, offender)
+	}
+
+	chal, err := challenge.GenerateInteractiveChallenge()
+	if err != nil {
+		log.Printf("handleInteractiveChallenge: Generation failed for IP %s: %v", clientIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := redisStoreGlobal.SetInteractiveChallenge(clientIP, chal.Nonce, chal, 5*time.Minute); err != nil {
+		log.Printf("handleInteractiveChallenge: Redis persist failed for IP %s: %v", clientIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"nonce":     chal.Nonce,
+		"sequence":  chal.Sequence,
+		"grid_size": chal.GridSize,
+	}
+	log.Printf("handleInteractiveChallenge: Issued for IP %s, nonce %s, seq %v", clientIP, chal.Nonce, chal.Sequence)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func handleVerifyInteractive(w http.ResponseWriter, r *http.Request) {
+	clientIP := getClientIP(r)
+	var req struct {
+		Nonce  string `json:"nonce"`
+		Clicks []struct {
+			Cell int   `json:"cell"`
+			Time int64 `json:"time"`
+		} `json:"clicks"`
+		B types.BehavioralData `json:"b"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("handleVerifyInteractive: Bad request from IP %s: %v", clientIP, err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	fingerprintStore.RLock()
+	fp, hasFingerprint := fingerprintStore.Data[clientIP]
+	fingerprintStore.RUnlock()
+	if !hasFingerprint {
+		log.Printf("handleVerifyInteractive: No fingerprint for IP %s", clientIP)
+		http.Error(w, "No fingerprint", http.StatusBadRequest)
+		return
+	}
+
+	var stored types.InteractiveChallenge
+	exists, err := redisStoreGlobal.GetInteractiveChallenge(clientIP, req.Nonce, &stored)
+	if err != nil {
+		log.Printf("handleVerifyInteractive: Redis error for IP %s: %v", clientIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !exists {
+		log.Printf("handleVerifyInteractive: No valid challenge for IP %s, nonce %s", clientIP, req.Nonce)
+		http.Error(w, "No valid challenge", http.StatusBadRequest)
+		return
+	}
+
+	// Timing: interactive takes at least 2 seconds
+	if !stored.IssuedAt.IsZero() && time.Since(stored.IssuedAt) < 2*time.Second {
+		log.Printf("handleVerifyInteractive: Timing violation for %s — elapsed %v", clientIP, time.Since(stored.IssuedAt))
+		http.Error(w, "Verification failed", http.StatusUnauthorized)
+		return
+	}
+
+	// Behavioral validation
+	if !validateBehavioral(&req.B, fp.IsMobile) {
+		log.Printf("handleVerifyInteractive: Behavioral check failed for %s", clientIP)
+		http.Error(w, "Verification failed", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract clicks and times
+	var clicks []int
+	var clickTimes []int64
+	for _, c := range req.Clicks {
+		clicks = append(clicks, c.Cell)
+		clickTimes = append(clickTimes, c.Time)
+	}
+
+	if !challenge.VerifyInteractiveChallenge(clicks, clickTimes, stored.Sequence) {
+		log.Printf("handleVerifyInteractive: Sequence verification failed for IP %s", clientIP)
+		http.Error(w, "Verification failed", http.StatusUnauthorized)
+		return
+	}
+
+	// Clean up
+	redisStoreGlobal.DeleteInteractiveChallenge(clientIP, req.Nonce)
+	if loadedConfig.Tarpit.Enabled {
+		reduceOffenderScore(clientIP)
+	}
+
+	log.Printf("handleVerifyInteractive: Interactive challenge verified for IP %s", clientIP)
+
+	// Issue JWT — identical to handleVerify
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"ip":  clientIP,
+		"exp": time.Now().Add(24 * time.Hour).Unix(),
+	})
+	tokenString, err := token.SignedString(jwtSecret)
+	if err != nil {
+		log.Printf("handleVerifyInteractive: Token generation failed for IP %s: %v", clientIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     "janus_token",
+		Value:    tokenString,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   24 * 60 * 60,
+	})
+
+	log.Printf("handleVerifyInteractive: Issued token for IP %s", clientIP)
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 func issueChallenge(w http.ResponseWriter, r *http.Request) {
@@ -705,10 +861,10 @@ func calculateTarpitDelay(cfg *config.JanusConfig, riskScore int, offender *type
 	return time.Duration(delayMs) * time.Millisecond
 }
 
-// calculateAdaptiveDifficulty computes PoW difficulty based on risk assessment
+// calculateAdaptiveDifficulty computes PoW difficulty based on risk assessment.
+// Difficulty is kept solvable: iterations are scaled in handleChallenge to match.
 func calculateAdaptiveDifficulty(cfg *config.JanusConfig, baseDifficulty, riskScore int, offender *types.OffenderRecord) int {
 	if !cfg.Tarpit.Enabled {
-		// Fallback to original simple logic
 		if riskScore > 80 {
 			return baseDifficulty + 2
 		}
@@ -716,35 +872,42 @@ func calculateAdaptiveDifficulty(cfg *config.JanusConfig, baseDifficulty, riskSc
 	}
 
 	difficulty := baseDifficulty
+	multiplier := cfg.Tarpit.DifficultyMultiplier
 
-	// Risk tier scaling
+	// Risk tier scaling — kept modest so PoW stays solvable with scaled iterations
 	switch {
 	case riskScore >= 80:
-		difficulty += cfg.Tarpit.DifficultyMultiplier * 4 // Extreme: +16 default
+		difficulty += multiplier // Extreme: +4 (e.g. diff 12)
 	case riskScore >= 50:
-		difficulty += cfg.Tarpit.DifficultyMultiplier * 3 // High: +12 default
+		difficulty += (multiplier * 3) / 4 // High: +3
 	case riskScore >= 30:
-		difficulty += cfg.Tarpit.DifficultyMultiplier * 2 // Medium: +8 default
+		difficulty += multiplier / 2 // Medium: +2
 	case riskScore >= 10:
-		difficulty += cfg.Tarpit.DifficultyMultiplier // Low: +4 default
+		difficulty += max(multiplier/4, 1) // Low: +1
 	}
 
-	// Repeat offender penalty
+	// Repeat offender penalty (capped)
 	if offender != nil && offender.Attempts > 1 {
 		penalty := (offender.Attempts - 1) * cfg.Tarpit.RepeatPenalty
-		if penalty > 10 {
-			penalty = 10 // cap repeat penalty at +10
+		if penalty > 4 {
+			penalty = 4
 		}
 		difficulty += penalty
 	}
 
-	// Absolute cap to prevent infinite computation
-	maxDifficulty := 28 // ~30+ seconds even on fast hardware
-	if difficulty > maxDifficulty {
-		difficulty = maxDifficulty
+	// Absolute cap — difficulty 16 requires ~65K hashes on average, solvable in seconds
+	if difficulty > 16 {
+		difficulty = 16
 	}
 
 	return difficulty
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // applyTarpitDelay blocks the goroutine for the calculated delay

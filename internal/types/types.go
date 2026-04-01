@@ -54,6 +54,13 @@ type Challenge struct {
 	IssuedAt   time.Time `json:"issued_at"`
 }
 
+type InteractiveChallenge struct {
+	Nonce    string    `json:"nonce"`
+	Sequence []int     `json:"sequence"`
+	GridSize int       `json:"grid_size"`
+	IssuedAt time.Time `json:"issued_at"`
+}
+
 type BehavioralData struct {
 	MouseMoves    int     `json:"mm"`
 	MouseEntropy  float64 `json:"me"`

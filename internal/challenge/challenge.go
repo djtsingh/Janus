@@ -44,7 +44,7 @@ func GenerateChallenge(cfg *config.JanusConfig, isMobile bool, riskScore int, hi
 	}, difficulty
 }
 
-func VerifyChallenge(proof, expectedNonce, expectedClientIP, expectedSeed string, isMobile bool, canvasHash string, cfg *config.JanusConfig, challengeDifficulty int) bool {
+func VerifyChallenge(proof, expectedNonce, expectedClientIP, expectedSeed string, isMobile bool, canvasHash string, cfg *config.JanusConfig, challengeDifficulty int, challengeIterations int) bool {
 	parts := strings.Split(proof, "|")
 	if isMobile {
 		if len(parts) != 5 {
@@ -69,9 +69,12 @@ func VerifyChallenge(proof, expectedNonce, expectedClientIP, expectedSeed string
 	}
 
 	iter, err := strconv.Atoi(iteration)
-	maxIter := cfg.MobileIterations
-	if !isMobile {
-		maxIter = cfg.DesktopIterations
+	maxIter := challengeIterations
+	if maxIter <= 0 {
+		maxIter = cfg.MobileIterations
+		if !isMobile {
+			maxIter = cfg.DesktopIterations
+		}
 	}
 	if err != nil || iter < 0 || iter > maxIter {
 		log.Printf("VerifyChallenge: Invalid iteration %s", iteration)
@@ -131,4 +134,81 @@ func generateSeed() (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(b), nil
+}
+
+// GenerateInteractiveChallenge creates a grid-click challenge for fallback verification.
+func GenerateInteractiveChallenge() (*types.InteractiveChallenge, error) {
+	nonce, err := generateNonce()
+	if err != nil {
+		return nil, err
+	}
+	gridSize := 4
+	totalCells := gridSize * gridSize
+	seqLen := 5
+
+	used := make(map[int]bool)
+	seq := make([]int, 0, seqLen)
+	for len(seq) < seqLen {
+		b := make([]byte, 1)
+		if _, err := rand.Read(b); err != nil {
+			return nil, err
+		}
+		cell := int(b[0]) % totalCells
+		if !used[cell] {
+			used[cell] = true
+			seq = append(seq, cell)
+		}
+	}
+
+	return &types.InteractiveChallenge{
+		Nonce:    nonce,
+		Sequence: seq,
+		GridSize: gridSize,
+		IssuedAt: time.Now(),
+	}, nil
+}
+
+// VerifyInteractiveChallenge checks click sequence, timing, and variance.
+func VerifyInteractiveChallenge(clicks []int, clickTimes []int64, expected []int) bool {
+	if len(clicks) != len(expected) {
+		log.Printf("VerifyInteractive: Click count mismatch: got %d, expected %d", len(clicks), len(expected))
+		return false
+	}
+	for i, c := range clicks {
+		if c != expected[i] {
+			log.Printf("VerifyInteractive: Wrong cell at position %d: got %d, expected %d", i, c, expected[i])
+			return false
+		}
+	}
+	// Each click must be within human reaction range
+	for i := 1; i < len(clickTimes); i++ {
+		gap := clickTimes[i] - clickTimes[i-1]
+		if gap < 200 || gap > 10000 {
+			log.Printf("VerifyInteractive: Timing gap %dms at index %d out of range", gap, i)
+			return false
+		}
+	}
+	// Detect robotic regularity — all identical gaps
+	if len(clickTimes) >= 3 {
+		var gaps []int64
+		for i := 1; i < len(clickTimes); i++ {
+			gaps = append(gaps, clickTimes[i]-clickTimes[i-1])
+		}
+		allSame := true
+		for i := 1; i < len(gaps); i++ {
+			diff := gaps[i] - gaps[0]
+			if diff < 0 {
+				diff = -diff
+			}
+			if diff > 50 {
+				allSame = false
+				break
+			}
+		}
+		if allSame {
+			log.Printf("VerifyInteractive: Timing variance too low (robotic)")
+			return false
+		}
+	}
+	return true
 }

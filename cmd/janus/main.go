@@ -14,7 +14,8 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.JanusMiddleware)
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("Welcome to your protected site!"))
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		http.ServeFile(w, r, "assets/protected.html")
 	})
 	r.Get("/sensor.js", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "assets/sensor.js")

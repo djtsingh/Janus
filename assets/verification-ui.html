@@ -5,233 +5,311 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Janus — Verifying</title>
   <style>
-    /* ── Reset & Design Tokens ────────────────────────────────────────── */
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
-      --bg:        #060b13;
-      --surface:   #0a1019;
-      --border:    rgba(255,255,255,0.065);
-      --gold:      #c9973c;
-      --gold-dim:  rgba(201,151,60,0.12);
-      --gold-glow: rgba(201,151,60,0.28);
-      --blue:      #3ab2d8;
-      --text:      #dde2ef;
-      --muted:     #475068;
-      --success:   #38d87a;
-      --error:     #e05252;
-      --mono:      'SF Mono','Fira Code','Cascadia Code','Consolas',monospace;
+      --bg:        #06090f;
+      --surface:   rgba(12,18,30,0.85);
+      --surface2:  rgba(16,24,40,0.7);
+      --border:    rgba(255,255,255,0.06);
+      --gold:      #d4a547;
+      --gold-dim:  rgba(212,165,71,0.10);
+      --gold-glow: rgba(212,165,71,0.35);
+      --blue:      #4db8db;
+      --blue-dim:  rgba(77,184,219,0.08);
+      --text:      #e0e4ef;
+      --text2:     #8d95ab;
+      --muted:     #4a5270;
+      --success:   #3ee88a;
+      --error:     #f05555;
+      --warn:      #f0a535;
+      --mono:      'SF Mono','Fira Code','Cascadia Code','JetBrains Mono','Consolas',monospace;
+      --sans:      'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',sans-serif;
+      --radius:    14px;
     }
     html, body {
       width: 100%; min-height: 100vh;
       background: var(--bg); color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
-      -webkit-font-smoothing: antialiased; overflow-x: hidden;
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
     }
 
-    /* ── Atmospheric Background ───────────────────────────────────────── */
-    .bg-wrap { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
-    .bg-grid {
-      position: absolute; inset: 0;
-      background-image:
-        linear-gradient(rgba(201,151,60,0.028) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(201,151,60,0.028) 1px, transparent 1px);
-      background-size: 52px 52px;
-      animation: grid-drift 55s linear infinite;
-    }
-    @keyframes grid-drift { to { background-position: 52px 52px; } }
+    /* ── Canvas Background ──────────────────────────────────────────── */
+    #bg-canvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
 
-    .orb { position: absolute; border-radius: 50%; filter: blur(100px); pointer-events: none; }
-    .orb-l {
-      width: 720px; height: 720px; top: -260px; left: -260px;
-      background: radial-gradient(circle, rgba(201,151,60,0.18) 0%, transparent 68%);
-      animation: orb-breathe 14s ease-in-out infinite alternate;
-    }
-    .orb-r {
-      width: 620px; height: 620px; bottom: -200px; right: -200px;
-      background: radial-gradient(circle, rgba(58,178,216,0.15) 0%, transparent 68%);
-      animation: orb-breathe 19s ease-in-out infinite alternate-reverse;
-    }
-    @keyframes orb-breathe {
-      from { transform: scale(1);    opacity: 1;   }
-      to   { transform: scale(1.18); opacity: 0.6; }
-    }
-
-    /* ── Page Layout ──────────────────────────────────────────────────── */
+    /* ── Layout ─────────────────────────────────────────────────────── */
     .page {
       position: relative; z-index: 1; min-height: 100vh;
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      gap: 26px; padding: 36px 16px;
+      gap: 28px; padding: 40px 20px;
     }
 
-    /* ── Janus Sigil ──────────────────────────────────────────────────── */
-    .sigil-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    /* ── Sigil ──────────────────────────────────────────────────────── */
+    .sigil-wrap { display: flex; flex-direction: column; align-items: center; gap: 16px; }
     .sigil {
-      position: relative; width: 84px; height: 84px;
+      position: relative; width: 80px; height: 80px;
       display: flex; align-items: center; justify-content: center;
     }
     .sigil-ring { position: absolute; border-radius: 50%; }
-    .sigil-ring-i {
-      inset: 0; border: 1.5px solid rgba(201,151,60,0.55);
+    .ring-outer {
+      inset: -12px;
+      border: 1px solid rgba(77,184,219,0.18);
+      animation: spin-ccw 22s linear infinite;
+    }
+    .ring-outer::after {
+      content: ''; position: absolute; bottom: -2px; left: calc(50% - 2.5px);
+      width: 5px; height: 5px; border-radius: 50%;
+      background: var(--blue); opacity: 0.6;
+    }
+    .ring-inner {
+      inset: 0;
+      border: 1.5px solid rgba(212,165,71,0.5);
       animation: spin-cw 9s linear infinite;
     }
-    .sigil-ring-i::before {
-      content: ''; position: absolute; top: -3.5px; left: calc(50% - 3px);
+    .ring-inner::after {
+      content: ''; position: absolute; top: -3px; left: calc(50% - 3px);
       width: 6px; height: 6px; border-radius: 50%;
-      background: var(--gold); box-shadow: 0 0 8px var(--gold-glow);
-    }
-    .sigil-ring-o {
-      inset: -11px; border: 1px solid rgba(58,178,216,0.2);
-      animation: spin-ccw 20s linear infinite;
-    }
-    .sigil-ring-o::before {
-      content: ''; position: absolute; bottom: -2.5px; left: calc(50% - 2.5px);
-      width: 5px; height: 5px; border-radius: 50%; background: var(--blue); opacity: 0.7;
+      background: var(--gold); box-shadow: 0 0 10px var(--gold-glow);
     }
     @keyframes spin-cw  { to { transform: rotate(360deg);  } }
     @keyframes spin-ccw { to { transform: rotate(-360deg); } }
 
-    .sigil-glyph {
-      position: absolute; inset: 12px;
-      display: flex; align-items: center; justify-content: center;
-    }
+    .sigil-glyph { position: absolute; inset: 10px; display: flex; align-items: center; justify-content: center; }
     .sigil-glyph svg { width: 100%; height: 100%; }
 
-    .wordmark { text-align: center; }
     .wordmark h1 {
-      font-size: 14px; font-weight: 700;
-      letter-spacing: 0.44em; text-transform: uppercase; color: var(--gold);
+      font-size: 13px; font-weight: 700; letter-spacing: 0.5em;
+      text-transform: uppercase; color: var(--gold); text-align: center;
     }
     .wordmark p {
-      font-size: 10px; letter-spacing: 0.22em;
-      text-transform: uppercase; color: var(--muted); margin-top: 4px;
+      font-size: 9.5px; letter-spacing: 0.25em; text-transform: uppercase;
+      color: var(--muted); text-align: center; margin-top: 3px;
     }
 
-    /* ── Verification Card ────────────────────────────────────────────── */
+    /* ── Card ────────────────────────────────────────────────────────── */
     .card {
-      width: 100%; max-width: 440px;
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 16px; overflow: hidden;
+      width: 100%; max-width: 460px;
+      background: var(--surface);
+      backdrop-filter: blur(20px) saturate(1.3);
+      -webkit-backdrop-filter: blur(20px) saturate(1.3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
       box-shadow:
         0 0 0 1px rgba(255,255,255,0.02),
-        0 32px 80px rgba(0,0,0,0.6),
-        0 0 120px var(--gold-dim);
-      animation: card-rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+        0 40px 100px rgba(0,0,0,0.55),
+        0 0 160px rgba(212,165,71,0.06);
+      animation: card-in 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
     }
-    @keyframes card-rise {
-      from { opacity: 0; transform: translateY(22px); }
-      to   { opacity: 1; transform: translateY(0); }
+    @keyframes card-in {
+      from { opacity: 0; transform: translateY(24px) scale(0.98); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
     }
-    .card-bar { height: 2px; background: linear-gradient(90deg, var(--gold) 0%, var(--blue) 100%); }
-    .card-body { padding: 24px 24px 20px; }
 
-    /* ── Live Status ──────────────────────────────────────────────────── */
+    .card-accent {
+      height: 2px;
+      background: linear-gradient(90deg, var(--gold) 0%, var(--blue) 50%, var(--gold) 100%);
+      background-size: 200% 100%;
+      animation: accent-slide 3s ease-in-out infinite;
+    }
+    @keyframes accent-slide {
+      0%, 100% { background-position: 0% 0; }
+      50%      { background-position: 100% 0; }
+    }
+
+    .card-body { padding: 28px 28px 24px; }
+
+    /* ── Status ──────────────────────────────────────────────────────── */
     .status-row {
-      display: flex; align-items: center; gap: 9px;
-      margin-bottom: 20px; min-height: 18px;
+      display: flex; align-items: center; gap: 10px;
+      margin-bottom: 22px; min-height: 20px;
     }
     #janus-dot {
-      flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%;
-      background: var(--gold); animation: dot-pulse 1.5s ease-in-out infinite;
+      flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%;
+      background: var(--gold);
+      animation: pulse 1.8s ease-in-out infinite;
     }
-    #janus-dot.done  { background: var(--success); animation: none; }
-    #janus-dot.error { background: var(--error);   animation: none; }
-    @keyframes dot-pulse {
+    #janus-dot.ok    { background: var(--success); animation: none; }
+    #janus-dot.err   { background: var(--error);   animation: none; }
+    #janus-dot.warn  { background: var(--warn);    animation: pulse 0.8s ease-in-out infinite; }
+    @keyframes pulse {
       0%,100% { opacity: 1;   box-shadow: 0 0 0 0 var(--gold-glow); }
-      50%      { opacity: 0.4; box-shadow: 0 0 0 5px transparent; }
+      50%     { opacity: 0.35; box-shadow: 0 0 0 6px transparent; }
     }
     #janus-status {
-      font-size: 11.5px; font-family: var(--mono);
-      color: var(--muted); flex: 1; line-height: 1.4;
+      font-size: 11.5px; font-family: var(--mono); color: var(--text2);
+      flex: 1; line-height: 1.5;
     }
 
-    /* ── Steps ────────────────────────────────────────────────────────── */
-    .steps { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+    /* ── Steps ───────────────────────────────────────────────────────── */
+    .steps { list-style: none; display: flex; flex-direction: column; gap: 4px; }
     .step {
       display: flex; align-items: center; gap: 14px;
-      padding: 11px 12px; border-radius: 9px; border: 1px solid transparent;
-      transition: background .35s ease, border-color .35s ease, opacity .35s ease;
-      opacity: 0.28;
+      padding: 12px 14px; border-radius: 10px;
+      border: 1px solid transparent;
+      transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      opacity: 0.22;
     }
-    .step.active  { opacity: 1; background: var(--gold-dim); border-color: rgba(201,151,60,0.17); }
-    .step.done    { opacity: 0.72; background: rgba(56,216,122,0.05); border-color: rgba(56,216,122,0.1); }
-    .step.errored { opacity: 1; background: rgba(224,82,82,0.07); border-color: rgba(224,82,82,0.2); }
+    .step.active  { opacity: 1; background: var(--gold-dim); border-color: rgba(212,165,71,0.14); }
+    .step.done    { opacity: 0.7; background: rgba(62,232,138,0.04); border-color: rgba(62,232,138,0.08); }
+    .step.errored { opacity: 1; background: rgba(240,85,85,0.06); border-color: rgba(240,85,85,0.14); }
+    .step.warn    { opacity: 1; background: rgba(240,165,53,0.06); border-color: rgba(240,165,53,0.14); }
 
-    .step-num {
-      width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; position: relative;
+    .step-icon {
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
       border: 1.5px solid var(--muted);
       font-size: 10px; font-weight: 700; font-family: var(--mono);
-      color: var(--muted); transition: all .3s;
+      color: var(--muted); transition: all 0.35s; position: relative;
     }
-    .step-num .n  { display: block; }
-    .step-num .ck { display: none; font-size: 14px; }
+    .step-icon .num { display: block; }
+    .step-icon .chk { display: none; font-size: 14px; }
+    .step-icon .wrn { display: none; font-size: 14px; }
 
-    .step.active .step-num { border-color: var(--gold); color: var(--gold); }
-    .step.active .step-num::after {
+    .step.active .step-icon { border-color: var(--gold); color: var(--gold); }
+    .step.active .step-icon::after {
       content: ''; position: absolute; inset: -5px; border-radius: 50%;
       border: 1.5px solid transparent; border-top-color: var(--gold);
-      animation: spin-cw .85s linear infinite;
+      animation: spin-cw 0.8s linear infinite;
     }
-    .step.done .step-num {
-      border-color: var(--success); background: rgba(56,216,122,0.1); color: var(--success);
-    }
-    .step.done   .step-num .n  { display: none; }
-    .step.done   .step-num .ck { display: block; }
-    .step.errored .step-num    { border-color: var(--error); color: var(--error); }
+    .step.done .step-icon { border-color: var(--success); background: rgba(62,232,138,0.08); color: var(--success); }
+    .step.done .step-icon .num { display: none; }
+    .step.done .step-icon .chk { display: block; }
+    .step.errored .step-icon { border-color: var(--error); color: var(--error); }
+    .step.warn .step-icon { border-color: var(--warn); color: var(--warn); }
+    .step.warn .step-icon .num { display: none; }
+    .step.warn .step-icon .wrn { display: block; }
 
-    .step-text strong {
+    .step-label strong {
       display: block; font-size: 12.5px; font-weight: 600;
-      letter-spacing: .03em; color: var(--text); margin-bottom: 2px; transition: color .3s;
+      letter-spacing: 0.02em; color: var(--text); margin-bottom: 2px;
     }
-    .step-text span   { font-size: 11px; font-family: var(--mono); color: var(--muted); }
-    .step-text .detail { color: rgba(201,151,60,0.7); }
+    .step-label span { font-size: 10.5px; font-family: var(--mono); color: var(--text2); }
+    .step.done    .step-label strong { color: var(--success); }
+    .step.errored .step-label strong { color: var(--error); }
+    .step.warn    .step-label strong { color: var(--warn); }
 
-    .step.done    .step-text strong { color: var(--success); }
-    .step.errored .step-text strong { color: var(--error); }
+    /* ── Footer ──────────────────────────────────────────────────────── */
+    .card-sep { height: 1px; background: var(--border); margin: 22px 0 16px; }
+    .card-foot { display: flex; align-items: center; justify-content: space-between; }
+    .card-brand { font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--muted); }
+    .card-brand b { color: rgba(212,165,71,0.55); font-weight: 600; }
+    .pbar { width: 80px; height: 2px; border-radius: 2px; background: rgba(255,255,255,0.04); overflow: hidden; }
+    .pbar-fill {
+      height: 100%; width: 0%; border-radius: 2px;
+      background: linear-gradient(90deg, var(--gold), var(--blue));
+      transition: width 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    }
 
-    /* ── Footer ── */
-    .card-divider { height: 1px; background: var(--border); margin: 20px 0 16px; }
-    .card-footer  { display: flex; align-items: center; justify-content: space-between; }
-    .card-brand   { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: var(--muted); }
-    .card-brand b { color: rgba(201,151,60,0.6); font-weight: 600; }
-    .pbar         { width: 76px; height: 2px; border-radius: 2px; background: rgba(255,255,255,0.05); overflow: hidden; }
-    .pbar-fill    { height: 100%; width: 0%; border-radius: 2px; background: linear-gradient(90deg,var(--gold),var(--blue)); transition: width .6s cubic-bezier(.22,1,.36,1); }
+    /* ── Interactive Challenge Grid ──────────────────────────────────── */
+    #interactive-section { display: none; margin-top: 18px; }
+    #interactive-section.show { display: block; animation: card-in 0.5s both; }
 
-    /* ── Tagline ── */
-    .tagline { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: rgba(71,80,104,0.45); }
+    .grid-intro {
+      font-size: 11.5px; color: var(--text2); text-align: center;
+      margin-bottom: 14px; line-height: 1.5;
+    }
+    .grid-intro strong { color: var(--gold); }
 
-    /* ── Responsive ── */
-    @media (max-width: 480px) {
-      .page { padding: 24px 12px; gap: 20px; }
-      .card-body { padding: 20px 16px 16px; }
-      .sigil { width: 68px; height: 68px; }
+    .grid-wrap {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 8px; max-width: 260px; margin: 0 auto 16px;
+    }
+    .grid-cell {
+      aspect-ratio: 1; border-radius: 10px;
+      background: var(--surface2); border: 1.5px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.25s;
+      font-size: 18px; user-select: none;
+      position: relative; overflow: hidden;
+    }
+    .grid-cell:hover { border-color: rgba(255,255,255,0.12); background: rgba(20,30,50,0.8); }
+    .grid-cell.lit {
+      border-color: var(--gold);
+      background: rgba(212,165,71,0.12);
+      box-shadow: 0 0 20px rgba(212,165,71,0.2), inset 0 0 20px rgba(212,165,71,0.06);
+      animation: cell-glow 0.8s ease-in-out infinite alternate;
+    }
+    .grid-cell.hit {
+      border-color: var(--success);
+      background: rgba(62,232,138,0.1);
+      box-shadow: 0 0 14px rgba(62,232,138,0.2);
+    }
+    .grid-cell.miss {
+      border-color: var(--error);
+      background: rgba(240,85,85,0.08);
+    }
+    @keyframes cell-glow {
+      from { box-shadow: 0 0 20px rgba(212,165,71,0.2), inset 0 0 20px rgba(212,165,71,0.06); }
+      to   { box-shadow: 0 0 30px rgba(212,165,71,0.35), inset 0 0 30px rgba(212,165,71,0.1); }
+    }
+
+    .grid-progress {
+      text-align: center; font-size: 10.5px; font-family: var(--mono);
+      color: var(--text2); margin-bottom: 6px;
+    }
+
+    /* ── Console Log ─────────────────────────────────────────────────── */
+    .log-toggle {
+      display: flex; align-items: center; gap: 6px;
+      cursor: pointer; user-select: none;
+      font-size: 9.5px; font-family: var(--mono); letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--muted);
+      margin-top: 20px; transition: color 0.2s;
+    }
+    .log-toggle:hover { color: var(--text2); }
+    .log-toggle .arrow { transition: transform 0.3s; display: inline-block; }
+    .log-toggle.open .arrow { transform: rotate(90deg); }
+
+    #log-panel {
+      display: none; margin-top: 8px;
+      max-height: 200px; overflow-y: auto;
+      background: rgba(6,9,15,0.8); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px;
+      font-size: 10px; font-family: var(--mono); line-height: 1.7;
+      color: var(--text2);
+    }
+    #log-panel.open { display: block; animation: card-in 0.3s both; }
+    #log-panel .l-info { color: var(--blue); }
+    #log-panel .l-ok   { color: var(--success); }
+    #log-panel .l-warn { color: var(--warn); }
+    #log-panel .l-err  { color: var(--error); }
+    #log-panel .l-ts   { color: var(--muted); margin-right: 6px; }
+
+    /* ── Tagline ─────────────────────────────────────────────────────── */
+    .tagline {
+      font-size: 9.5px; letter-spacing: 0.22em;
+      text-transform: uppercase; color: rgba(74,82,112,0.4);
+    }
+
+    /* ── Responsive ──────────────────────────────────────────────────── */
+    @media (max-width: 500px) {
+      .page { padding: 24px 14px; gap: 22px; }
+      .card-body { padding: 22px 18px 18px; }
+      .sigil { width: 64px; height: 64px; }
+      .grid-wrap { max-width: 220px; gap: 6px; }
     }
   </style>
 </head>
 <body>
 
-  <div class="bg-wrap" aria-hidden="true">
-    <div class="bg-grid"></div>
-    <div class="orb orb-l"></div>
-    <div class="orb orb-r"></div>
-  </div>
+  <canvas id="bg-canvas" aria-hidden="true"></canvas>
 
   <main class="page">
 
-    <!-- Sigil & Wordmark -->
     <div class="sigil-wrap">
       <div class="sigil" aria-hidden="true">
-        <div class="sigil-ring sigil-ring-o"></div>
-        <div class="sigil-ring sigil-ring-i"></div>
+        <div class="sigil-ring ring-outer"></div>
+        <div class="sigil-ring ring-inner"></div>
         <div class="sigil-glyph">
           <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M26 11 A15 15 0 0 0 26 41" stroke="#c9973c" stroke-width="1.6" fill="none" stroke-linecap="round"/>
-            <path d="M26 11 A15 15 0 0 1 26 41" stroke="#3ab2d8" stroke-width="1.6" fill="none" stroke-linecap="round"/>
-            <line x1="26" y1="7" x2="26" y2="45" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>
-            <circle cx="18" cy="23" r="2.2" fill="#c9973c"/>
-            <circle cx="34" cy="23" r="2.2" fill="#3ab2d8"/>
-            <path d="M11 45 L11 33 Q26 20 41 33 L41 45" stroke="rgba(201,151,60,0.22)" stroke-width="1.1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M26 11 A15 15 0 0 0 26 41" stroke="#d4a547" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+            <path d="M26 11 A15 15 0 0 1 26 41" stroke="#4db8db" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+            <line x1="26" y1="7" x2="26" y2="45" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+            <circle cx="18" cy="23" r="2.2" fill="#d4a547"/>
+            <circle cx="34" cy="23" r="2.2" fill="#4db8db"/>
+            <path d="M11 45 L11 33 Q26 20 41 33 L41 45" stroke="rgba(212,165,71,0.18)" stroke-width="1" fill="none" stroke-linecap="round"/>
           </svg>
         </div>
       </div>
@@ -241,9 +319,8 @@
       </div>
     </div>
 
-    <!-- Verification Card -->
-    <div class="card" role="main" aria-label="Verification in progress">
-      <div class="card-bar"></div>
+    <div class="card" role="main" aria-label="Verification">
+      <div class="card-accent"></div>
       <div class="card-body">
 
         <div class="status-row">
@@ -252,34 +329,50 @@
         </div>
 
         <ol class="steps" aria-label="Verification phases">
-          <li class="step active" id="step-0">
-            <div class="step-num" aria-hidden="true"><span class="n">01</span><span class="ck">&#10003;</span></div>
-            <div class="step-text">
+          <li class="step active" id="s0">
+            <div class="step-icon"><span class="num">01</span><span class="chk">&#10003;</span><span class="wrn">!</span></div>
+            <div class="step-label">
               <strong>Device Fingerprint</strong>
-              <span id="step-0-detail">Analysing browser &amp; hardware signals</span>
+              <span id="s0-d">Collecting browser &amp; hardware signals</span>
             </div>
           </li>
-          <li class="step" id="step-1">
-            <div class="step-num" aria-hidden="true"><span class="n">02</span><span class="ck">&#10003;</span></div>
-            <div class="step-text">
+          <li class="step" id="s1">
+            <div class="step-icon"><span class="num">02</span><span class="chk">&#10003;</span><span class="wrn">!</span></div>
+            <div class="step-label">
               <strong>Proof of Work</strong>
-              <span id="step-1-detail">Cryptographic challenge computation</span>
+              <span id="s1-d">Awaiting cryptographic challenge</span>
             </div>
           </li>
-          <li class="step" id="step-2">
-            <div class="step-num" aria-hidden="true"><span class="n">03</span><span class="ck">&#10003;</span></div>
-            <div class="step-text">
+          <li class="step" id="s2">
+            <div class="step-icon"><span class="num">03</span><span class="chk">&#10003;</span><span class="wrn">!</span></div>
+            <div class="step-label">
               <strong>Gateway Access</strong>
-              <span id="step-2-detail">Validating proof &amp; issuing session token</span>
+              <span id="s2-d">Token issuance pending</span>
             </div>
           </li>
         </ol>
 
-        <div class="card-divider"></div>
-        <div class="card-footer">
-          <span class="card-brand">Protected by <b>Janus</b></span>
-          <div class="pbar"><div class="pbar-fill" id="janus-progress"></div></div>
+        <!-- Interactive Fallback (hidden by default) -->
+        <div id="interactive-section">
+          <div class="grid-intro">
+            PoW exhausted &mdash; <strong>click each highlighted cell</strong> in sequence to verify you are human.
+          </div>
+          <div class="grid-progress" id="grid-progress">Waiting for challenge&hellip;</div>
+          <div class="grid-wrap" id="grid-wrap"></div>
         </div>
+
+        <div class="card-sep"></div>
+        <div class="card-foot">
+          <span class="card-brand">Protected by <b>Janus</b></span>
+          <div class="pbar"><div class="pbar-fill" id="pbar"></div></div>
+        </div>
+
+        <!-- Console Log -->
+        <div class="log-toggle" id="log-toggle" onclick="toggleLog()">
+          <span class="arrow">&#9654;</span> Debug Console
+        </div>
+        <div id="log-panel"></div>
+
       </div>
     </div>
 
@@ -287,284 +380,486 @@
 
   </main>
 
-  <script>
-    // ── Behavioral Tracking ─────────────────────────────────────────────
-    var _b = { mv: [], ck: 0, kp: 0, sc: 0, tc: 0, t0: Date.now() };
-    document.addEventListener('mousemove', function(e) {
-      if (_b.mv.length < 200) _b.mv.push([e.clientX, e.clientY, Date.now()]);
+<script>
+// ═══════════════════════════════════════════════════════════════════════
+// JANUS CLIENT — Verification Flow with Interactive Fallback
+// ═══════════════════════════════════════════════════════════════════════
+
+// ── Console Logger ──────────────────────────────────────────────────
+var _logPanel = null;
+function jlog(level, msg) {
+  var ts = new Date().toISOString().substr(11, 12);
+  var cls = level === 'ok' ? 'l-ok' : level === 'warn' ? 'l-warn' : level === 'err' ? 'l-err' : 'l-info';
+  var prefix = level === 'ok' ? '✓' : level === 'warn' ? '⚠' : level === 'err' ? '✗' : '→';
+  var consoleFn = level === 'err' ? console.error : level === 'warn' ? console.warn : console.log;
+  consoleFn('[Janus ' + ts + '] ' + prefix + ' ' + msg);
+  if (!_logPanel) _logPanel = document.getElementById('log-panel');
+  if (_logPanel) {
+    var line = document.createElement('div');
+    line.innerHTML = '<span class="l-ts">' + ts + '</span><span class="' + cls + '">' + prefix + ' ' + msg + '</span>';
+    _logPanel.appendChild(line);
+    _logPanel.scrollTop = _logPanel.scrollHeight;
+  }
+}
+
+function toggleLog() {
+  var tog = document.getElementById('log-toggle');
+  var pan = document.getElementById('log-panel');
+  tog.classList.toggle('open');
+  pan.classList.toggle('open');
+}
+
+// ── Behavioral Tracking ─────────────────────────────────────────────
+var _b = { mv: [], ck: 0, kp: 0, sc: 0, tc: 0, t0: Date.now() };
+document.addEventListener('mousemove', function(e) {
+  if (_b.mv.length < 200) _b.mv.push([e.clientX, e.clientY, Date.now()]);
+});
+document.addEventListener('click',      function() { _b.ck++; });
+document.addEventListener('keydown',    function() { _b.kp++; });
+document.addEventListener('scroll',     function() { _b.sc++; });
+document.addEventListener('touchstart', function() { _b.tc++; });
+
+function getBehavioral() {
+  var mm = _b.mv.length;
+  var me = 0;
+  if (mm >= 3) {
+    var angles = [];
+    for (var i = 2; i < mm; i++) {
+      var dx1 = _b.mv[i-1][0] - _b.mv[i-2][0], dy1 = _b.mv[i-1][1] - _b.mv[i-2][1];
+      var dx2 = _b.mv[i][0] - _b.mv[i-1][0],   dy2 = _b.mv[i][1] - _b.mv[i-1][1];
+      angles.push(Math.atan2(dy2, dx2) - Math.atan2(dy1, dx1));
+    }
+    var mean = angles.reduce(function(s,v){return s+v;},0) / angles.length;
+    me = angles.reduce(function(s,v){return s+(v-mean)*(v-mean);},0) / angles.length;
+  }
+  var data = { mm: mm, me: Math.round(me*1000)/1000, kp: _b.kp, se: _b.sc, te: _b.tc, im: Date.now()-_b.t0 };
+  jlog('info', 'Behavioral: moves=' + data.mm + ' entropy=' + data.me + ' keys=' + data.kp +
+       ' scroll=' + data.se + ' touch=' + data.te + ' time=' + data.im + 'ms');
+  return data;
+}
+
+// ── Environment Probes ──────────────────────────────────────────────
+function probeEnv() {
+  var s = 0;
+  try { if (navigator.webdriver) { s += 30; jlog('warn', 'Env: navigator.webdriver=true (+30)'); } } catch(e) {}
+  try {
+    var keys = Object.keys(window);
+    for (var i = 0; i < keys.length; i++) { if (/^cdc_/.test(keys[i])) { s += 40; jlog('warn', 'Env: ChromeDriver key detected (+40)'); break; } }
+  } catch(e) {}
+  try {
+    if (document.__selenium_evaluate || document.__selenium_unwrapped ||
+        window._selenium || window.callSelenium || window.__fxdriver_unwrapped) { s += 40; jlog('warn', 'Env: Selenium artefacts (+40)'); }
+  } catch(e) {}
+  try { if (window.__playwright || window.__pw_manual) { s += 40; jlog('warn', 'Env: Playwright detected (+40)'); } } catch(e) {}
+  var isChromeUA = /Chrome\//.test(navigator.userAgent) && !/Edg\/|OPR\//.test(navigator.userAgent);
+  try { if (isChromeUA && !(window.chrome && window.chrome.runtime)) { s += 15; jlog('warn', 'Env: Chrome UA but no runtime (+15)'); } } catch(e) {}
+  try { if (navigator.plugins.length === 0 && !/Firefox/i.test(navigator.userAgent)) { s += 15; jlog('warn', 'Env: Zero plugins (+15)'); } } catch(e) {}
+  try { if (!navigator.languages || navigator.languages.length === 0) { s += 20; jlog('warn', 'Env: No languages (+20)'); } } catch(e) {}
+  try { if (window.outerWidth === 0 || window.outerHeight === 0) { s += 25; jlog('warn', 'Env: Zero outer dimensions (+25)'); } } catch(e) {}
+  jlog(s > 0 ? 'warn' : 'ok', 'Env probe total bot_score=' + s);
+  return s;
+}
+
+// ── UI Helpers ──────────────────────────────────────────────────────
+var STEPS = ['s0','s1','s2'];
+function $(id) { return document.getElementById(id); }
+
+function setStep(idx) {
+  STEPS.forEach(function(id, i) {
+    var e = $(id); if (!e) return;
+    e.className = 'step' + (i < idx ? ' done' : i === idx ? ' active' : '');
+  });
+  $('pbar').style.width = [33,66,100][idx] + '%';
+}
+function completeStep(idx) {
+  var e = $(STEPS[idx]); if (e) e.className = 'step done';
+  $('pbar').style.width = [33,66,100][idx] + '%';
+}
+function warnStep(idx, msg) {
+  var e = $(STEPS[idx]); if (e) e.className = 'step warn';
+  if (msg) setDetail(idx, msg);
+}
+function setStatus(t)     { $('janus-status').textContent = t; }
+function setDetail(i, t)  { var d = $('s'+i+'-d'); if (d) d.textContent = t; }
+function setDone() {
+  setStatus('Verification complete \u2014 granting access\u2026');
+  $('janus-dot').className = 'ok';
+  STEPS.forEach(function(id){ var e = $(id); if(e) e.className = 'step done'; });
+  $('pbar').style.width = '100%';
+}
+function setError(msg) {
+  $('janus-dot').className = 'err';
+  setStatus(msg || 'Verification failed \u2014 refresh to retry');
+  STEPS.forEach(function(id){
+    var e = $(id); if (e && e.className.indexOf('active') !== -1) e.className = 'step errored';
+  });
+  jlog('err', msg);
+}
+
+// ── Canvas / WebGL Fingerprint ──────────────────────────────────────
+function getCanvasHash() {
+  try {
+    var c = document.createElement('canvas'); c.width = 220; c.height = 50;
+    var ctx = c.getContext('2d');
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#f60'; ctx.fillRect(120,1,62,20);
+    ctx.fillStyle = '#069'; ctx.font = '14px Arial';
+    ctx.fillText('Browser fingerprint', 2, 15);
+    ctx.fillStyle = 'rgba(102,126,234,0.7)';
+    ctx.fillText('Janus security', 4, 17);
+    var hash = c.toDataURL();
+    jlog('info', 'Canvas hash: ' + hash.substring(0, 60) + '\u2026');
+    return hash;
+  } catch(e) { jlog('warn', 'Canvas hash failed: ' + e.message); return 'canvas-error'; }
+}
+function getWebGL() {
+  try {
+    var gl = document.createElement('canvas').getContext('webgl');
+    var r = gl ? gl.getParameter(gl.RENDERER) : 'no-webgl';
+    jlog('info', 'WebGL renderer: ' + r);
+    return r;
+  } catch(e) { return 'no-webgl'; }
+}
+function getFonts() {
+  var test = ['Arial','Times New Roman','Helvetica','Georgia','Verdana'];
+  return test.filter(function(f){
+    try { return document.fonts.check('12px "'+f+'"'); } catch(e) { return false; }
+  }).join(',');
+}
+
+function buildFingerprint() {
+  jlog('info', 'Building device fingerprint\u2026');
+  var isMobile = /Mobi|Android/i.test(navigator.userAgent);
+  var canvasHash = getCanvasHash();
+  var botScore = probeEnv();
+  var fp = {
+    plugins: Array.from(navigator.plugins||[]).map(function(p){return p.name;}).join(','),
+    hardware_concurrency: navigator.hardwareConcurrency || 0,
+    webdriver: !!navigator.webdriver,
+    chrome_exists: !!window.chrome,
+    canvas_hash: canvasHash,
+    screen_resolution: screen.width + 'x' + screen.height,
+    color_depth: screen.colorDepth || 24,
+    fonts: getFonts(),
+    webgl_renderer: getWebGL(),
+    ja3: 'unknown-ja3',
+    screen: { width: screen.width, height: screen.height },
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    jsEnabled: true,
+    isMobile: isMobile,
+    bot_score: botScore
+  };
+  jlog('ok', 'Fingerprint built \u2014 mobile=' + isMobile + ' hw=' + fp.hardware_concurrency +
+       ' screen=' + fp.screen_resolution + ' tz=' + fp.timezone + ' botScore=' + botScore);
+  return { fingerprint: fp, canvasHash: canvasHash, isMobile: isMobile };
+}
+
+// ── PoW Computation ─────────────────────────────────────────────────
+function hasLeadingZeroBits(hash, zeroBits) {
+  var full = Math.floor(zeroBits / 8), extra = zeroBits % 8;
+  for (var i = 0; i < full; i++) { if (hash[i] !== 0) return false; }
+  if (extra > 0) { var mask = 0xFF << (8 - extra); return (hash[full] & mask) === 0; }
+  return true;
+}
+
+async function computePoW(nonce, seed, clientIP, difficulty, maxIter, isMobile, canvasHash) {
+  jlog('info', 'PoW start \u2014 difficulty=' + difficulty + ' maxIter=' + maxIter.toLocaleString());
+  var timestamp = new Date().toISOString();
+  var enc = new TextEncoder();
+  var startTime = performance.now();
+  for (var i = 0; i < maxIter; i++) {
+    var proof = nonce + '|' + i + '|' + timestamp + '|' + clientIP + '|' + seed;
+    if (!isMobile) proof += '|' + canvasHash;
+    var hash = await crypto.subtle.digest('SHA-256', enc.encode(proof));
+    if (i > 0 && i % 500 === 0) {
+      var rate = Math.round(i / ((performance.now() - startTime) / 1000));
+      setDetail(1, 'Hashing\u2026 ' + i.toLocaleString() + ' / ' + maxIter.toLocaleString() + '  (' + rate.toLocaleString() + ' H/s)');
+      if (i % 2000 === 0) {
+        jlog('info', 'PoW progress: ' + i.toLocaleString() + '/' + maxIter.toLocaleString() + ' @ ' + rate.toLocaleString() + ' H/s');
+      }
+    }
+    if (hasLeadingZeroBits(new Uint8Array(hash), difficulty)) {
+      var elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+      jlog('ok', 'PoW solved at iteration ' + i.toLocaleString() + ' in ' + elapsed + 's');
+      return proof;
+    }
+  }
+  var elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+  jlog('warn', 'PoW exhausted after ' + maxIter.toLocaleString() + ' iterations in ' + elapsed + 's');
+  return null;
+}
+
+// ── Interactive Challenge ───────────────────────────────────────────
+var CELL_ICONS = ['\u25C6','\u25CF','\u25B2','\u25A0','\u25C7','\u25CB','\u25B3','\u25A1','\u2605','\u2666','\u2660','\u2663','\u2665','\u2B21','\u2B22','\u25CE'];
+
+async function runInteractiveChallenge() {
+  jlog('info', 'Requesting interactive challenge from server\u2026');
+  setStatus('Requesting interactive challenge\u2026');
+  warnStep(1, 'PoW exhausted \u2014 switching to interactive');
+
+  var res = await fetch('/janus/interactive-challenge', { credentials: 'include' });
+  if (!res.ok) throw new Error('Interactive challenge request failed (' + res.status + ')');
+  var ch = await res.json();
+  jlog('ok', 'Interactive challenge received \u2014 nonce=' + ch.nonce + ' grid=' + ch.grid_size + 'x' + ch.grid_size + ' seq_len=' + ch.sequence.length);
+
+  var section = $('interactive-section');
+  section.classList.add('show');
+  var wrap = $('grid-wrap');
+  wrap.innerHTML = '';
+
+  var gridSize = ch.grid_size || 4;
+  var cells = [];
+  for (var i = 0; i < gridSize * gridSize; i++) {
+    var cell = document.createElement('div');
+    cell.className = 'grid-cell';
+    cell.dataset.idx = i;
+    cell.textContent = CELL_ICONS[i % CELL_ICONS.length];
+    wrap.appendChild(cell);
+    cells.push(cell);
+  }
+
+  var seq = ch.sequence;
+  var clickIndex = 0;
+  var clicks = [];
+
+  setStatus('Click each highlighted cell in order');
+  $('grid-progress').textContent = 'Step 0 of ' + seq.length;
+
+  // Highlight first cell after short delay
+  await sleep(600);
+  cells[seq[0]].classList.add('lit');
+  jlog('info', 'Interactive: Cell ' + seq[0] + ' highlighted (1/' + seq.length + ')');
+
+  return new Promise(function(resolve, reject) {
+    function onCellClick(e) {
+      var target = e.target.closest('.grid-cell');
+      if (!target) return;
+      var idx = parseInt(target.dataset.idx);
+      var expected = seq[clickIndex];
+
+      clicks.push({ cell: idx, time: Date.now() });
+
+      if (idx === expected) {
+        target.classList.remove('lit');
+        target.classList.add('hit');
+        clickIndex++;
+        $('grid-progress').textContent = 'Step ' + clickIndex + ' of ' + seq.length;
+        jlog('ok', 'Interactive: Correct click on cell ' + idx + ' (' + clickIndex + '/' + seq.length + ')');
+
+        if (clickIndex >= seq.length) {
+          wrap.removeEventListener('click', onCellClick);
+          jlog('ok', 'Interactive: All cells clicked correctly');
+          resolve({ nonce: ch.nonce, clicks: clicks });
+        } else {
+          setTimeout(function() {
+            cells[seq[clickIndex]].classList.add('lit');
+            jlog('info', 'Interactive: Cell ' + seq[clickIndex] + ' highlighted (' + (clickIndex+1) + '/' + seq.length + ')');
+          }, 350);
+        }
+      } else {
+        target.classList.add('miss');
+        setTimeout(function() { target.classList.remove('miss'); }, 400);
+        jlog('warn', 'Interactive: Wrong cell ' + idx + ', expected ' + expected);
+      }
+    }
+    wrap.addEventListener('click', onCellClick);
+  });
+}
+
+function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+// ── Main Verification Flow ──────────────────────────────────────────
+async function run() {
+  jlog('info', '\u2550\u2550\u2550 Janus verification sequence started \u2550\u2550\u2550');
+  jlog('info', 'User-Agent: ' + navigator.userAgent);
+  jlog('info', 'Screen: ' + screen.width + 'x' + screen.height + '@' + screen.colorDepth + 'bit');
+
+  // ── Phase 1: Fingerprint ───────────────────────────────
+  setStatus('Collecting device fingerprint\u2026');
+  var fp;
+  try {
+    fp = buildFingerprint();
+    jlog('info', 'Sending fingerprint to /janus/fingerprint\u2026');
+    var r = await fetch('/janus/fingerprint', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(fp.fingerprint)
     });
-    document.addEventListener('click', function() { _b.ck++; });
-    document.addEventListener('keydown', function() { _b.kp++; });
-    document.addEventListener('scroll', function() { _b.sc++; });
-    document.addEventListener('touchstart', function() { _b.tc++; });
+    if (!r.ok) throw new Error('Fingerprint rejected (' + r.status + ')');
+    jlog('ok', 'Fingerprint accepted by server (HTTP ' + r.status + ')');
+    completeStep(0);
+    setStep(1);
+    setStatus('Fingerprint verified \u2014 requesting challenge\u2026');
+  } catch(e) {
+    setError('Fingerprint failed: ' + e.message);
+    return;
+  }
 
-    function getBehavioral() {
-      var mm = _b.mv.length;
-      var me = 0;
-      if (mm >= 3) {
-        var angles = [];
-        for (var i = 2; i < mm; i++) {
-          var dx1 = _b.mv[i-1][0] - _b.mv[i-2][0];
-          var dy1 = _b.mv[i-1][1] - _b.mv[i-2][1];
-          var dx2 = _b.mv[i][0] - _b.mv[i-1][0];
-          var dy2 = _b.mv[i][1] - _b.mv[i-1][1];
-          angles.push(Math.atan2(dy2, dx2) - Math.atan2(dy1, dx1));
-        }
-        var mean = angles.reduce(function(s, v) { return s + v; }, 0) / angles.length;
-        me = angles.reduce(function(s, v) { return s + (v - mean) * (v - mean); }, 0) / angles.length;
-      }
-      return {
-        mm: mm,
-        me: Math.round(me * 1000) / 1000,
-        kp: _b.kp,
-        se: _b.sc,
-        te: _b.tc,
-        im: Date.now() - _b.t0
-      };
-    }
+  // ── Phase 2: Request challenge ─────────────────────────
+  var ch;
+  try {
+    jlog('info', 'Requesting PoW challenge from /janus/challenge\u2026');
+    var cr = await fetch('/janus/challenge', { credentials: 'include' });
+    if (!cr.ok) throw new Error('Challenge request failed (' + cr.status + ')');
+    ch = await cr.json();
+    jlog('ok', 'Challenge received \u2014 nonce=' + ch.nonce + ' type=' + ch.type +
+         ' difficulty=' + ch.difficulty + ' iterations=' + ch.iterations + ' clientIP=' + ch.clientIP);
+  } catch(e) {
+    setError('Challenge request failed: ' + e.message);
+    return;
+  }
 
-    // ── Environment Probes ──────────────────────────────────────────────
-    function probeEnv() {
-      var s = 0;
-      try { if (navigator.webdriver) s += 30; } catch(e) {}
-      try {
-        var keys = Object.keys(window);
-        for (var i = 0; i < keys.length; i++) { if (/^cdc_/.test(keys[i])) { s += 40; break; } }
-      } catch(e) {}
-      try {
-        if (document.__selenium_evaluate || document.__selenium_unwrapped ||
-            window._selenium || window.callSelenium || window.__fxdriver_unwrapped) s += 40;
-      } catch(e) {}
-      try { if (window.__playwright || window.__pw_manual) s += 40; } catch(e) {}
-      var isChromeUA = /Chrome\//.test(navigator.userAgent) && !/Edg\/|OPR\//.test(navigator.userAgent);
-      try { if (isChromeUA && !(window.chrome && window.chrome.runtime)) s += 15; } catch(e) {}
-      try { if (navigator.plugins.length === 0 && !/Firefox/i.test(navigator.userAgent)) s += 15; } catch(e) {}
-      try { if (!navigator.languages || navigator.languages.length === 0) s += 20; } catch(e) {}
-      try { if (window.outerWidth === 0 || window.outerHeight === 0) s += 25; } catch(e) {}
-      return s;
-    }
+  var nonce   = ch.nonce;
+  var seed    = ch.seed;
+  var cliIP   = ch.clientIP;
+  var diff    = ch.difficulty != null ? ch.difficulty : 8;
+  // Use server-sent iterations with sane client-side caps
+  var maxIter = ch.iterations || 5000;
+  if (fp.isMobile && maxIter > 50000)   maxIter = 50000;
+  if (!fp.isMobile && maxIter > 500000) maxIter = 500000;
+  jlog('info', 'Effective params: difficulty=' + diff + ' maxIter=' + maxIter.toLocaleString() + ' mobile=' + fp.isMobile);
 
-    // ── UI Helpers ──────────────────────────────────────────────────────
-    var STEPS = ['step-0', 'step-1', 'step-2'];
-    var PCTS  = [33, 66, 100];
+  // ── Phase 3: Solve PoW ─────────────────────────────────
+  setStatus('Computing proof of work\u2026');
+  setDetail(1, 'Starting hash computation\u2026');
+  var proof;
+  try {
+    proof = await computePoW(nonce, seed, cliIP, diff, maxIter, fp.isMobile, fp.canvasHash);
+  } catch(e) {
+    jlog('err', 'PoW error: ' + e.message);
+    proof = null;
+  }
 
-    function el(id) { return document.getElementById(id); }
+  // ── Phase 3b: Interactive Fallback ─────────────────────
+  if (!proof) {
+    jlog('warn', 'PoW did not find a valid proof \u2014 falling back to interactive challenge');
+    setDetail(1, 'PoW exhausted \u2014 interactive fallback activated');
+    try {
+      var icResult = await runInteractiveChallenge();
 
-    function setStep(idx) {
-      STEPS.forEach(function(id, i) {
-        var e = el(id); if (!e) return;
-        e.className = 'step' + (i < idx ? ' done' : i === idx ? ' active' : '');
-      });
-      var fill = el('janus-progress');
-      if (fill && PCTS[idx] != null) fill.style.width = PCTS[idx] + '%';
-    }
-
-    function completeStep(idx) {
-      var e = el(STEPS[idx]); if (e) e.className = 'step done';
-      var fill = el('janus-progress');
-      if (fill) fill.style.width = PCTS[idx] + '%';
-    }
-
-    function setStatus(text) {
-      var s = el('janus-status'); if (s) s.textContent = text;
-    }
-
-    function setDetail(stepIdx, text) {
-      var d = el('step-' + stepIdx + '-detail'); if (d) d.textContent = text;
-    }
-
-    function setDone() {
-      setStatus('Verification complete \u2014 granting access\u2026');
-      el('janus-dot').className = 'done';
-      STEPS.forEach(function(id) { var e = el(id); if (e) e.className = 'step done'; });
-      el('janus-progress').style.width = '100%';
-    }
-
-    function setError(msg) {
-      el('janus-dot').className = 'error';
-      setStatus(msg || 'Verification failed \u2014 refresh to retry');
-      STEPS.forEach(function(id) {
-        var e = el(id);
-        if (e && e.className.indexOf('active') !== -1) e.className = 'step errored';
-      });
-    }
-
-    // ── Canvas Fingerprint ──────────────────────────────────────────────
-    function getCanvasHash() {
-      try {
-        var c = document.createElement('canvas');
-        c.width = 220; c.height = 50;
-        var ctx = c.getContext('2d');
-        ctx.textBaseline = 'alphabetic';
-        ctx.fillStyle = '#f60'; ctx.fillRect(120,1,62,20);
-        ctx.fillStyle = '#069'; ctx.font = '14px Arial';
-        ctx.fillText('Browser fingerprint', 2, 15);
-        ctx.fillStyle = 'rgba(102,126,234,0.7)';
-        ctx.fillText('Janus security', 4, 17);
-        return c.toDataURL();
-      } catch(e) { return 'canvas-error'; }
-    }
-
-    function getWebGL() {
-      try {
-        var gl = document.createElement('canvas').getContext('webgl');
-        return gl ? gl.getParameter(gl.RENDERER) : 'no-webgl';
-      } catch(e) { return 'no-webgl'; }
-    }
-
-    function getFonts() {
-      var test = ['Arial','Times New Roman','Helvetica','Georgia','Verdana'];
-      return test.filter(function(f) {
-        try { return document.fonts.check('12px "' + f + '"'); } catch(e) { return false; }
-      }).join(',');
-    }
-
-    function buildFingerprint() {
-      var isMobile = /Mobi|Android/i.test(navigator.userAgent);
-      var canvasHash = getCanvasHash();
-      return {
-        fingerprint: {
-          plugins: Array.from(navigator.plugins || []).map(function(p){return p.name;}).join(','),
-          hardware_concurrency: navigator.hardwareConcurrency || 0,
-          webdriver: !!navigator.webdriver,
-          chrome_exists: !!window.chrome,
-          canvas_hash: canvasHash,
-          screen_resolution: screen.width + 'x' + screen.height,
-          color_depth: screen.colorDepth || 24,
-          fonts: getFonts(),
-          webgl_renderer: getWebGL(),
-          ja3: 'unknown-ja3',
-          screen: { width: screen.width, height: screen.height },
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          jsEnabled: true,
-          isMobile: isMobile,
-          bot_score: probeEnv()
-        },
-        canvasHash: canvasHash,
-        isMobile: isMobile
-      };
-    }
-
-    // ── PoW Computation ─────────────────────────────────────────────────
-    function hasLeadingZeroBits(hash, zeroBits) {
-      var full = Math.floor(zeroBits / 8);
-      var extra = zeroBits % 8;
-      for (var i = 0; i < full; i++) { if (hash[i] !== 0) return false; }
-      if (extra > 0) { var mask = 0xFF << (8 - extra); return (hash[full] & mask) === 0; }
-      return true;
-    }
-
-    async function computePoW(nonce, seed, clientIP, difficulty, maxIter, isMobile, canvasHash) {
-      var timestamp = new Date().toISOString();
-      var enc = new TextEncoder();
-      var attempts = 0;
-      for (var i = 0; i < maxIter; i++) {
-        var proof = nonce + '|' + i + '|' + timestamp + '|' + clientIP + '|' + seed;
-        if (!isMobile) proof += '|' + canvasHash;
-        var buf = enc.encode(proof);
-        var hash = await crypto.subtle.digest('SHA-256', buf);
-        attempts++;
-        if (attempts % 100 === 0) {
-          setDetail(1, 'Hashing\u2026 attempt ' + attempts.toLocaleString() + ' of ' + maxIter.toLocaleString());
-        }
-        if (hasLeadingZeroBits(new Uint8Array(hash), difficulty)) {
-          return proof;
-        }
-      }
-      return null; // exhausted
-    }
-
-    // ── Main Verification Flow ──────────────────────────────────────────
-    async function run() {
-      // ── Phase 1: Fingerprint ───────────────────────────────
-      setStatus('Collecting device fingerprint\u2026');
-      var fp;
-      try {
-        fp = buildFingerprint();
-        var r = await fetch('/janus/fingerprint', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify(fp.fingerprint)
-        });
-        if (!r.ok) throw new Error('Fingerprint rejected (' + r.status + ')');
-        completeStep(0);
-        setStep(1);
-        setStatus('Fingerprint verified \u2014 generating challenge\u2026');
-      } catch(e) {
-        setError('Fingerprint failed: ' + e.message);
-        return;
-      }
-
-      // ── Phase 2: Challenge request ─────────────────────────
-      var ch;
-      try {
-        var cr = await fetch('/janus/challenge', { credentials: 'include' });
-        if (!cr.ok) throw new Error('Challenge request failed (' + cr.status + ')');
-        ch = await cr.json();
-      } catch(e) {
-        setError('Challenge request failed: ' + e.message);
-        return;
-      }
-
-      var nonce   = ch.nonce;
-      var seed    = ch.seed;
-      var cliIP   = ch.clientIP;
-      var diff    = ch.difficulty != null ? ch.difficulty : 8;
-      var maxIter = Math.min(ch.iterations || 5000, fp.isMobile ? 1500 : 5000);
-
-      // ── Phase 3: Solve challenge ───────────────────────────
-      // ── Proof of Work computation ──────────────────────────
-      setStatus('Computing proof of work\u2026');
-      setDetail(1, 'Starting hash computation\u2026');
-      var proof;
-      try {
-        proof = await computePoW(nonce, seed, cliIP, diff, maxIter, fp.isMobile, fp.canvasHash);
-        if (!proof) throw new Error('Could not find valid proof within ' + maxIter + ' attempts');
-      } catch(e) {
-        setError('Proof computation failed: ' + e.message);
-        return;
-      }
-
-      // ── Phase 4: Verify ────────────────────────────────────
-      completeStep(1);
       setStep(2);
-      setStatus('Proof ready \u2014 contacting gateway\u2026');
+      setStatus('Verifying interactive challenge\u2026');
+      jlog('info', 'Submitting interactive proof to /janus/verify-interactive\u2026');
 
-      try {
-        var vr = await fetch('/janus/verify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ nonce: nonce, proof: proof, b: getBehavioral() })
-        });
+      var vr = await fetch('/janus/verify-interactive', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ nonce: icResult.nonce, clicks: icResult.clicks, b: getBehavioral() })
+      });
+      if (vr.status === 400) {
+        setError('Challenge expired \u2014 refreshing\u2026');
+        jlog('warn', 'Challenge expired, reloading in 2s');
+        setTimeout(function(){ location.reload(); }, 2000);
+        return;
+      }
+      if (!vr.ok) throw new Error('Interactive verification rejected (' + vr.status + ')');
+      var result = await vr.json();
+      if (result.status !== 'success') throw new Error('Unexpected response');
+      jlog('ok', 'Interactive verification accepted \u2014 token issued');
+      completeStep(1); completeStep(2); setDone();
+      setTimeout(function(){ window.location.href = '/'; }, 800);
+      return;
 
-        if (vr.status === 400) {
-          setError('Challenge expired \u2014 refreshing\u2026');
-          setTimeout(function(){ location.reload(); }, 2000);
-          return;
+    } catch(e) {
+      setError('Interactive verification failed: ' + e.message);
+      return;
+    }
+  }
+
+  // ── Phase 4: Submit PoW ────────────────────────────────
+  completeStep(1); setStep(2);
+  setStatus('Proof ready \u2014 verifying with gateway\u2026');
+  jlog('info', 'Submitting PoW proof to /janus/verify\u2026');
+
+  try {
+    var vr = await fetch('/janus/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ nonce: nonce, proof: proof, b: getBehavioral() })
+    });
+    if (vr.status === 400) {
+      setError('Challenge expired \u2014 refreshing\u2026');
+      jlog('warn', 'Challenge expired, reloading in 2s');
+      setTimeout(function(){ location.reload(); }, 2000);
+      return;
+    }
+    if (!vr.ok) throw new Error('Verification rejected (' + vr.status + ')');
+    var result = await vr.json();
+    if (result.status !== 'success') throw new Error('Unexpected response');
+    jlog('ok', 'PoW verification accepted \u2014 token issued');
+    completeStep(2); setDone();
+    jlog('ok', '\u2550\u2550\u2550 Verification complete \u2014 redirecting \u2550\u2550\u2550');
+    setTimeout(function(){ window.location.href = '/'; }, 800);
+  } catch(e) {
+    setError('Gateway rejected proof \u2014 ' + e.message);
+  }
+}
+
+// ── Particle Background ─────────────────────────────────────────────
+(function initBg() {
+  var cv = document.getElementById('bg-canvas');
+  if (!cv) return;
+  var ctx = cv.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var W, H, particles = [];
+
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    cv.width = W * dpr; cv.height = H * dpr;
+    cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  var N = Math.min(60, Math.floor(W * H / 18000));
+  for (var i = 0; i < N; i++) {
+    particles.push({
+      x: Math.random() * W, y: Math.random() * H,
+      vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3,
+      r: Math.random() * 1.5 + 0.5,
+      a: Math.random() * 0.3 + 0.05
+    });
+  }
+
+  function frame() {
+    ctx.clearRect(0, 0, W, H);
+    for (var i = 0; i < particles.length; i++) {
+      var p = particles[i];
+      p.x += p.vx; p.y += p.vy;
+      if (p.x < 0) p.x = W; if (p.x > W) p.x = 0;
+      if (p.y < 0) p.y = H; if (p.y > H) p.y = 0;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(212,165,71,' + p.a + ')';
+      ctx.fill();
+      for (var j = i + 1; j < particles.length; j++) {
+        var q = particles[j];
+        var dx = p.x - q.x, dy = p.y - q.y;
+        var dist = dx * dx + dy * dy;
+        if (dist < 14000) {
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y);
+          ctx.strokeStyle = 'rgba(77,184,219,' + (0.06 * (1 - dist / 14000)) + ')';
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
         }
-        if (!vr.ok) throw new Error('Verification rejected (' + vr.status + ')');
-
-        var result = await vr.json();
-        if (result.status !== 'success') throw new Error('Unexpected response');
-
-        completeStep(2);
-        setDone();
-        setTimeout(function(){ window.location.href = '/'; }, 600);
-
-      } catch(e) {
-        setError('Gateway rejected the proof \u2014 ' + e.message);
       }
     }
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
 
-    // Start after DOM is ready
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', run);
-    } else {
-      run();
-    }
-  </script>
-
+// ── Start ───────────────────────────────────────────────────────────
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', run);
+} else {
+  run();
+}
+</script>
 </body>
 </html>
