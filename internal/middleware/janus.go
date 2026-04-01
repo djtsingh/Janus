@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,43 +33,15 @@ const (
 	ja3ContextKey contextKey = "ja3"
 )
 
-type ChallengeStore struct {
-	sync.RWMutex
-	data map[string]struct {
-		Challenge *types.Challenge
-		Expires   time.Time
-	}
-}
-
-// OffenderRecord tracks repeat suspicious behavior for tarpit escalation
-type OffenderRecord struct {
-	Attempts   int       // number of suspicious requests
-	FirstSeen  time.Time // when first flagged
-	LastSeen   time.Time // most recent suspicious request
-	TotalScore int       // cumulative suspicion score
-	LastScore  int       // most recent suspicion score
-}
-
-// OffenderStore tracks IPs with suspicious behavior for tarpit escalation
-type OffenderStore struct {
-	sync.RWMutex
-	data map[string]*OffenderRecord
-}
+// Redis-backed stores are used for challenges and offenders; fingerprints remain in-memory.
+var redisStoreGlobal *store.Store
 
 var (
 	fingerprintStore = &types.FingerprintStore{Data: make(map[string]types.Fingerprint)}
-
-	challengeStore = &ChallengeStore{data: make(map[string]struct {
-		Challenge *types.Challenge
-		Expires   time.Time
-	})}
-
-	// offenderStore tracks repeat offenders for progressive penalties
-	offenderStore = &OffenderStore{data: make(map[string]*OffenderRecord)}
-	loadedConfig  *config.JanusConfig
-	configOnce    sync.Once
-	jwtSecret     = []byte("your-secure-random-secret-key-32bytes")
-	geoDB         *geoip2.Reader
+	loadedConfig     *config.JanusConfig
+	configOnce       sync.Once
+	jwtSecret        = []byte("your-secure-random-secret-key-32bytes")
+	geoDB            *geoip2.Reader
 )
 
 var janusRouter *chi.Mux
@@ -86,33 +59,7 @@ func init() {
 	if err != nil {
 		log.Printf("init: GeoIP database load error: %v, geo checks disabled", err)
 	}
-
-	go func() {
-		for {
-			time.Sleep(1 * time.Minute)
-			// Cleanup expired challenges
-			challengeStore.Lock()
-			for key, stored := range challengeStore.data {
-				if time.Now().After(stored.Expires) {
-					delete(challengeStore.data, key)
-				}
-			}
-			challengeStore.Unlock()
-
-			// Cleanup old offender records
-			if loadedConfig != nil && loadedConfig.Tarpit.Enabled {
-				offenderStore.Lock()
-				expiry := time.Duration(loadedConfig.Tarpit.OffenderMemoryMins) * time.Minute
-				for ip, record := range offenderStore.data {
-					if time.Since(record.LastSeen) > expiry {
-						log.Printf("Tarpit: Clearing offender record for %s (expired after %v)", ip, expiry)
-						delete(offenderStore.data, ip)
-					}
-				}
-				offenderStore.Unlock()
-			}
-		}
-	}()
+	// With Redis-backed challenges and offenders, no in-process cleanup required.
 }
 
 func JanusMiddleware(next http.Handler) http.Handler {
@@ -123,13 +70,24 @@ func JanusMiddleware(next http.Handler) http.Handler {
 			log.Printf("Failed to load config: %v, using default config", err)
 			loadedConfig = config.DefaultConfig()
 		}
+		// Allow overriding JWT secret via environment for production
+		if s := os.Getenv("JANUS_JWT_SECRET"); s != "" {
+			jwtSecret = []byte(s)
+			log.Printf("JanusMiddleware: Using JWT secret from environment")
+		}
 	})
 
-	redisAddr := loadedConfig.RedisAddr
+	// Prefer REDIS_ADDR env var if provided, otherwise use config.yaml value, fallback to localhost
+	redisAddr := os.Getenv("REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = loadedConfig.RedisAddr
+	}
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
 	redisStore := store.New(redisAddr)
+	// expose redis store to package-level handlers
+	redisStoreGlobal = redisStore
 	rateLimit := loadedConfig.RateLimit.RequestsPerMinute
 	if rateLimit == 0 {
 		rateLimit = 60
@@ -138,6 +96,13 @@ func JanusMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		clientIP := getClientIP(r)
 		log.Printf("Request: %s, Method: %s, IP: %s, UA: %s", r.URL.Path, r.Method, clientIP, r.Header.Get("User-Agent"))
+
+		// health endpoint bypasses verification
+		if r.URL.Path == "/health" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+			return
+		}
 
 		if strings.HasPrefix(r.URL.Path, "/janus/") {
 			log.Printf("Serving Janus API endpoint: %s", r.URL.Path)
@@ -437,7 +402,7 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 	suspicious, riskScore := isSuspicious(r, loadedConfig)
 
 	// Track offenders and apply tarpit measures
-	var offender *OffenderRecord
+	var offender *types.OffenderRecord
 	if suspicious && loadedConfig.Tarpit.Enabled {
 		offender = recordOffender(clientIP, riskScore)
 		log.Printf("handleChallenge: User %s is suspicious, risk score %d, offense #%d",
@@ -471,12 +436,12 @@ func handleChallenge(w http.ResponseWriter, r *http.Request) {
 			clientIP, baseDifficulty, chal.Difficulty, riskScore)
 	}
 
-	challengeStore.Lock()
-	challengeStore.data[clientIP+chal.Nonce] = struct {
-		Challenge *types.Challenge
-		Expires   time.Time
-	}{Challenge: chal, Expires: time.Now().Add(5 * time.Minute)}
-	challengeStore.Unlock()
+	// Persist challenge in Redis with 5 minute TTL so it survives restarts and supports multiple instances
+	if err := redisStoreGlobal.SetChallenge(clientIP, chal.Nonce, chal, 5*time.Minute); err != nil {
+		log.Printf("handleChallenge: Failed to persist challenge for IP %s: %v", clientIP, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
 
 	response := map[string]interface{}{
 		"nonce":      chal.Nonce,
@@ -515,10 +480,14 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	challengeStore.RLock()
-	stored, exists := challengeStore.data[clientIP+req.Nonce]
-	challengeStore.RUnlock()
-	if !exists || time.Now().After(stored.Expires) {
+	var storedChallenge types.Challenge
+	exists, err := redisStoreGlobal.GetChallenge(clientIP, req.Nonce, &storedChallenge)
+	if err != nil {
+		log.Printf("handleVerify: Redis error fetching challenge for IP %s, nonce %s: %v", clientIP, req.Nonce, err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	if !exists {
 		log.Printf("handleVerify: No valid challenge for IP %s, nonce %s", clientIP, req.Nonce)
 		http.Error(w, "No valid challenge", http.StatusBadRequest)
 		return
@@ -526,7 +495,7 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 
 	// Handle different challenge types
 	verified := false
-	switch stored.Challenge.Type {
+	switch storedChallenge.Type {
 	case "image":
 		// Image challenge: user clicked the correct image
 		if req.Proof == "image-solved" {
@@ -541,18 +510,18 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 	default:
 		// PoW challenge: verify computational proof
-		verified = challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, stored.Challenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig)
+		verified = challenge.VerifyChallenge(req.Proof, req.Nonce, clientIP, storedChallenge.Seed, fp.IsMobile, fp.CanvasHash, loadedConfig)
 	}
 
 	if !verified {
-		log.Printf("handleVerify: Proof verification failed for IP %s, nonce %s, proof %s, type %s", clientIP, req.Nonce, req.Proof, stored.Challenge.Type)
+		log.Printf("handleVerify: Proof verification failed for IP %s, nonce %s, proof %s, type %s", clientIP, req.Nonce, req.Proof, storedChallenge.Type)
 		http.Error(w, "Verification failed", http.StatusUnauthorized)
 		return
 	}
 
-	challengeStore.Lock()
-	delete(challengeStore.data, clientIP+req.Nonce)
-	challengeStore.Unlock()
+	if err := redisStoreGlobal.DeleteChallenge(clientIP, req.Nonce); err != nil {
+		log.Printf("handleVerify: Failed to delete challenge for IP %s, nonce %s: %v", clientIP, req.Nonce, err)
+	}
 
 	// Graceful tarpit: reduce offender record on successful verification
 	// This rewards legitimate users who solve challenges
@@ -600,40 +569,48 @@ func issueChallenge(w http.ResponseWriter, r *http.Request) {
 // ============================================================================
 
 // recordOffender tracks suspicious behavior for progressive penalties
-func recordOffender(clientIP string, riskScore int) *OffenderRecord {
-	offenderStore.Lock()
-	defer offenderStore.Unlock()
-
-	record, exists := offenderStore.data[clientIP]
+func recordOffender(clientIP string, riskScore int) *types.OffenderRecord {
+	var rec types.OffenderRecord
+	exists, err := redisStoreGlobal.GetOffender(clientIP, &rec)
+	if err != nil {
+		log.Printf("recordOffender: Redis error reading offender %s: %v", clientIP, err)
+	}
+	now := time.Now()
 	if !exists {
-		record = &OffenderRecord{
-			Attempts:   0,
-			FirstSeen:  time.Now(),
-			TotalScore: 0,
-		}
-		offenderStore.data[clientIP] = record
+		rec = types.OffenderRecord{Attempts: 0, FirstSeen: now, TotalScore: 0}
+	}
+	rec.Attempts++
+	rec.LastSeen = now
+	rec.TotalScore += riskScore
+	rec.LastScore = riskScore
+
+	ttl := time.Duration(loadedConfig.Tarpit.OffenderMemoryMins) * time.Minute
+	if err := redisStoreGlobal.SetOffender(clientIP, rec, ttl); err != nil {
+		log.Printf("recordOffender: Failed to persist offender %s: %v", clientIP, err)
 	}
 
-	record.Attempts++
-	record.LastSeen = time.Now()
-	record.TotalScore += riskScore
-	record.LastScore = riskScore
-
 	log.Printf("Tarpit: Recorded offense for %s - attempts: %d, total_score: %d, last_score: %d",
-		clientIP, record.Attempts, record.TotalScore, record.LastScore)
+		clientIP, rec.Attempts, rec.TotalScore, rec.LastScore)
 
-	return record
+	return &rec
 }
 
 // getOffenderRecord retrieves the offender record without modifying it
-func getOffenderRecord(clientIP string) *OffenderRecord {
-	offenderStore.RLock()
-	defer offenderStore.RUnlock()
-	return offenderStore.data[clientIP]
+func getOffenderRecord(clientIP string) *types.OffenderRecord {
+	var rec types.OffenderRecord
+	exists, err := redisStoreGlobal.GetOffender(clientIP, &rec)
+	if err != nil {
+		log.Printf("getOffenderRecord: Redis error for %s: %v", clientIP, err)
+		return nil
+	}
+	if !exists {
+		return nil
+	}
+	return &rec
 }
 
 // calculateTarpitDelay determines how long to delay response based on suspicion
-func calculateTarpitDelay(cfg *config.JanusConfig, riskScore int, offender *OffenderRecord) time.Duration {
+func calculateTarpitDelay(cfg *config.JanusConfig, riskScore int, offender *types.OffenderRecord) time.Duration {
 	if !cfg.Tarpit.Enabled {
 		return 0
 	}
@@ -656,7 +633,7 @@ func calculateTarpitDelay(cfg *config.JanusConfig, riskScore int, offender *Offe
 }
 
 // calculateAdaptiveDifficulty computes PoW difficulty based on risk assessment
-func calculateAdaptiveDifficulty(cfg *config.JanusConfig, baseDifficulty, riskScore int, offender *OffenderRecord) int {
+func calculateAdaptiveDifficulty(cfg *config.JanusConfig, baseDifficulty, riskScore int, offender *types.OffenderRecord) int {
 	if !cfg.Tarpit.Enabled {
 		// Fallback to original simple logic
 		if riskScore > 80 {
@@ -698,7 +675,7 @@ func calculateAdaptiveDifficulty(cfg *config.JanusConfig, baseDifficulty, riskSc
 }
 
 // applyTarpitDelay blocks the goroutine for the calculated delay
-func applyTarpitDelay(cfg *config.JanusConfig, clientIP string, riskScore int, offender *OffenderRecord) {
+func applyTarpitDelay(cfg *config.JanusConfig, clientIP string, riskScore int, offender *types.OffenderRecord) {
 	delay := calculateTarpitDelay(cfg, riskScore, offender)
 	if delay > 0 {
 		log.Printf("Tarpit: Delaying response to %s by %v (risk: %d, attempts: %d)",
@@ -715,24 +692,30 @@ func applyTarpitDelay(cfg *config.JanusConfig, clientIP string, riskScore int, o
 // reduceOffenderScore gracefully reduces penalties for users who successfully verify
 // This rewards legitimate users who may have been falsely flagged
 func reduceOffenderScore(clientIP string) {
-	offenderStore.Lock()
-	defer offenderStore.Unlock()
-
-	record, exists := offenderStore.data[clientIP]
+	var rec types.OffenderRecord
+	exists, err := redisStoreGlobal.GetOffender(clientIP, &rec)
+	if err != nil {
+		log.Printf("reduceOffenderScore: Redis error for %s: %v", clientIP, err)
+		return
+	}
 	if !exists {
 		return
 	}
-
-	// Halve the attempt count on successful verification (forgiveness)
-	record.Attempts = record.Attempts / 2
-	record.TotalScore = record.TotalScore / 2
-
-	// If they're back to clean slate, remove the record entirely
-	if record.Attempts <= 0 {
-		delete(offenderStore.data, clientIP)
-		log.Printf("Tarpit: Cleared offender record for %s after successful verification", clientIP)
+	rec.Attempts = rec.Attempts / 2
+	rec.TotalScore = rec.TotalScore / 2
+	if rec.Attempts <= 0 {
+		if err := redisStoreGlobal.DeleteOffender(clientIP); err != nil {
+			log.Printf("reduceOffenderScore: Failed to delete offender %s: %v", clientIP, err)
+		} else {
+			log.Printf("Tarpit: Cleared offender record for %s after successful verification", clientIP)
+		}
 	} else {
-		log.Printf("Tarpit: Reduced offender score for %s - attempts now: %d, total_score: %d",
-			clientIP, record.Attempts, record.TotalScore)
+		ttl := time.Duration(loadedConfig.Tarpit.OffenderMemoryMins) * time.Minute
+		if err := redisStoreGlobal.SetOffender(clientIP, rec, ttl); err != nil {
+			log.Printf("reduceOffenderScore: Failed to persist offender %s: %v", clientIP, err)
+		} else {
+			log.Printf("Tarpit: Reduced offender score for %s - attempts now: %d, total_score: %d",
+				clientIP, rec.Attempts, rec.TotalScore)
+		}
 	}
 }

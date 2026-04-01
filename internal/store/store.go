@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -84,4 +85,64 @@ func (st *Store) IsRateLimited(identifier string, limit int) (bool, error) {
 	}
 
 	return count.Val() > int64(limit), nil
+}
+
+// Challenge persistence
+func (st *Store) SetChallenge(clientIP, nonce string, challenge interface{}, ttl time.Duration) error {
+	key := fmt.Sprintf("challenge:%s:%s", clientIP, nonce)
+	data, err := json.Marshal(challenge)
+	if err != nil {
+		return err
+	}
+	return st.rdb.SetEX(ctx, key, data, ttl).Err()
+}
+
+func (st *Store) GetChallenge(clientIP, nonce string, out interface{}) (bool, error) {
+	key := fmt.Sprintf("challenge:%s:%s", clientIP, nonce)
+	data, err := st.rdb.Get(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (st *Store) DeleteChallenge(clientIP, nonce string) error {
+	key := fmt.Sprintf("challenge:%s:%s", clientIP, nonce)
+	return st.rdb.Del(ctx, key).Err()
+}
+
+// Offender persistence
+func (st *Store) SetOffender(clientIP string, offender interface{}, ttl time.Duration) error {
+	key := fmt.Sprintf("offender:%s", clientIP)
+	data, err := json.Marshal(offender)
+	if err != nil {
+		return err
+	}
+	return st.rdb.SetEX(ctx, key, data, ttl).Err()
+}
+
+func (st *Store) GetOffender(clientIP string, out interface{}) (bool, error) {
+	key := fmt.Sprintf("offender:%s", clientIP)
+	data, err := st.rdb.Get(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (st *Store) DeleteOffender(clientIP string) error {
+	key := fmt.Sprintf("offender:%s", clientIP)
+	return st.rdb.Del(ctx, key).Err()
 }

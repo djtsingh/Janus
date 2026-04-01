@@ -19,6 +19,12 @@ func main() {
 	r.Get("/sensor.js", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "assets/sensor.js")
 	})
+	// Health endpoint (middleware will bypass verification for /health)
+	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok","service":"janus"}`))
+	})
 
 	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {

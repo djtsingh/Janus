@@ -2,6 +2,7 @@ package types
 
 import (
 	"sync"
+	"time"
 )
 
 type Fingerprint struct {
@@ -28,6 +29,14 @@ type Fingerprint struct {
 type FingerprintStore struct {
 	sync.RWMutex
 	Data map[string]Fingerprint
+}
+
+type OffenderRecord struct {
+	Attempts   int       `json:"attempts"`
+	FirstSeen  time.Time `json:"firstSeen"`
+	LastSeen   time.Time `json:"lastSeen"`
+	TotalScore int       `json:"totalScore"`
+	LastScore  int       `json:"lastScore"`
 }
 
 type Verification struct {
