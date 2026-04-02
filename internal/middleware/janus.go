@@ -550,10 +550,13 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Timing enforcement: reject proofs submitted too quickly (likely automated)
+	// Timing enforcement: reject proofs submitted impossibly fast (bypass detection).
+	// Threshold is intentionally low — the tarpit already enforces wait times for
+	// suspicious users. This guard only catches submissions that somehow skip PoW
+	// entirely and arrive in under 200ms.
 	if !storedChallenge.IssuedAt.IsZero() {
 		elapsed := time.Since(storedChallenge.IssuedAt)
-		if elapsed < 1500*time.Millisecond {
+		if elapsed < 200*time.Millisecond {
 			log.Printf("handleVerify: Timing violation for %s - elapsed %v", clientIP, elapsed)
 			http.Error(w, "Verification failed", http.StatusUnauthorized)
 			return
@@ -718,7 +721,7 @@ func handleVerifyInteractive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Timing: interactive takes at least 2 seconds
-	if !stored.IssuedAt.IsZero() && time.Since(stored.IssuedAt) < 2*time.Second {
+	if !stored.IssuedAt.IsZero() && time.Since(stored.IssuedAt) < 200*time.Millisecond {
 		log.Printf("handleVerifyInteractive: Timing violation for %s — elapsed %v", clientIP, time.Since(stored.IssuedAt))
 		http.Error(w, "Verification failed", http.StatusUnauthorized)
 		return
