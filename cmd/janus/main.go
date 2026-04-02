@@ -15,12 +15,15 @@ func main() {
 	r.Use(middleware.JanusMiddleware)
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		http.ServeFile(w, r, "assets/protected.html")
 	})
 	r.Get("/sensor.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
 		http.ServeFile(w, r, "assets/sensor.js")
 	})
 	r.Get("/verify-ui", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		http.ServeFile(w, r, "assets/verification-ui.html")
 	})
 	// Health endpoint (middleware will bypass verification for /health)

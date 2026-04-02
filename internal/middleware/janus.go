@@ -114,6 +114,7 @@ func JanusMiddleware(next http.Handler) http.Handler {
 		}
 		if r.URL.Path == "/verify-ui" {
 			log.Printf("Serving verification UI asset")
+			w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 			http.ServeFile(w, r, "assets/verification-ui.html")
 			return
 		}
@@ -786,6 +787,7 @@ func handleVerifyInteractive(w http.ResponseWriter, r *http.Request) {
 func issueChallenge(w http.ResponseWriter, r *http.Request) {
 	log.Printf("issueChallenge: Serving verification UI for %s", getClientIP(r))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 	if data, err := os.ReadFile("assets/verification-ui.html"); err == nil {
 		w.WriteHeader(http.StatusOK)
 		w.Write(data)

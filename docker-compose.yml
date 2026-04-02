@@ -15,6 +15,7 @@ services:
       - "127.0.0.1:8443:8080"
       - "127.0.0.1:8080:8081"
     volumes:
+      - ./assets:/app/assets
       - ./config.yaml:/app/config.yaml:ro
       - ./GeoLite2-City.mmdb:/app/GeoLite2-City.mmdb:ro
       - ./cert.pem:/app/cert.pem:ro
