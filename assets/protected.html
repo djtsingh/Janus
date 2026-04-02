@@ -1,276 +1,378 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Protected — Janus Gateway</title>
+  <title>Janus — Clearance Granted</title>
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
-      --bg:       #06090f;
-      --surface:  rgba(12,18,30,0.82);
-      --border:   rgba(255,255,255,0.06);
-      --gold:     #d4a547;
-      --gold-dim: rgba(212,165,71,0.10);
-      --blue:     #4db8db;
-      --text:     #e0e4ef;
-      --text2:    #8d95ab;
-      --muted:    #4a5270;
-      --success:  #3ee88a;
-      --mono:     'SF Mono','Fira Code','Cascadia Code','JetBrains Mono','Consolas',monospace;
-      --sans:     'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI','Helvetica Neue',sans-serif;
+      --bg:      #08080c;
+      --card:    #0d0e15;
+      --b:       #1b1c26;
+      --b2:      #242534;
+      --dm:      #3a3d52;
+      --mm:      #636882;
+      --t:       #959ab2;
+      --th:      #c2c6d8;
+      --green:   #3ad870;
+      --amber:   #c08a38;
+      --blue:    #4595b8;
+      --red:     #e05050;
+      --mono: 'SF Mono','Fira Code','Cascadia Code','JetBrains Mono','Consolas',monospace;
     }
     html, body {
-      width: 100%; min-height: 100vh;
-      background: var(--bg); color: var(--text);
-      font-family: var(--sans);
-      -webkit-font-smoothing: antialiased;
+      min-height: 100vh; background: var(--bg); color: var(--t);
+      font-family: var(--mono); font-size: 13px;
+      -webkit-font-smoothing: antialiased; line-height: 1;
     }
-
-    #bg-canvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
-
     .page {
-      position: relative; z-index: 1; min-height: 100vh;
-      display: flex; flex-direction: column;
+      min-height: 100vh; display: flex;
       align-items: center; justify-content: center;
-      gap: 32px; padding: 48px 20px;
+      padding: 40px 16px;
     }
-
-    /* ── Hero ─────────────────────────────────────────────────── */
-    .hero { display: flex; flex-direction: column; align-items: center; gap: 20px; }
-
-    .shield {
-      width: 88px; height: 88px; position: relative;
-      display: flex; align-items: center; justify-content: center;
+    .terminal {
+      width: 100%; max-width: 540px;
+      background: var(--card); border: 1px solid var(--b);
     }
-    .shield-ring {
-      position: absolute; inset: 0; border-radius: 50%;
-      border: 2px solid rgba(62,232,138,0.3);
-      animation: shield-pulse 3s ease-in-out infinite;
+    /* ── Header bar ── */
+    .t-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 18px; border-bottom: 1px solid var(--b);
+      background: #0a0b11;
     }
-    @keyframes shield-pulse {
-      0%,100% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 0 rgba(62,232,138,0.2); }
-      50%     { transform: scale(1.06); opacity: 0.7; box-shadow: 0 0 30px rgba(62,232,138,0.15); }
-    }
-    .shield-icon {
-      font-size: 36px; position: relative; z-index: 1;
-      filter: drop-shadow(0 0 12px rgba(62,232,138,0.4));
-    }
-
-    .hero-text { text-align: center; }
-    .hero-text h1 {
-      font-size: 22px; font-weight: 700; letter-spacing: 0.01em;
-      color: var(--success); margin-bottom: 6px;
-    }
-    .hero-text p {
-      font-size: 13px; color: var(--text2); line-height: 1.6;
-    }
-
-    /* ── Info Card ────────────────────────────────────────────── */
-    .info-card {
-      width: 100%; max-width: 520px;
-      background: var(--surface);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
-      border: 1px solid var(--border);
-      border-radius: 16px; overflow: hidden;
-      box-shadow: 0 30px 80px rgba(0,0,0,0.5), 0 0 120px rgba(212,165,71,0.04);
-      animation: card-in 0.6s cubic-bezier(0.16,1,0.3,1) both;
-    }
-    @keyframes card-in {
-      from { opacity: 0; transform: translateY(20px) scale(0.98); }
-      to   { opacity: 1; transform: translateY(0) scale(1); }
-    }
-
-    .info-accent {
-      height: 2px;
-      background: linear-gradient(90deg, var(--success), var(--blue), var(--gold));
-    }
-    .info-body { padding: 28px 28px 24px; }
-
-    .info-header {
-      display: flex; align-items: center; gap: 10px;
-      margin-bottom: 20px;
-    }
-    .info-dot {
+    .t-bar-left { display: flex; align-items: center; gap: 8px; }
+    .t-dots { display: flex; gap: 5px; }
+    .t-dots span {
       width: 8px; height: 8px; border-radius: 50%;
-      background: var(--success);
+      background: var(--b2); display: block;
     }
-    .info-title {
-      font-size: 11px; font-family: var(--mono); letter-spacing: 0.1em;
-      text-transform: uppercase; color: var(--success);
+    .t-title {
+      font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--mm); user-select: none;
     }
-
-    /* ── Stats Grid ──────────────────────────────────────────── */
-    .stats {
-      display: grid; grid-template-columns: 1fr 1fr;
-      gap: 12px; margin-bottom: 20px;
+    .t-badge {
+      font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--green); border: 1px solid rgba(58,216,112,0.25);
+      padding: 2px 8px;
     }
-    .stat {
-      padding: 14px 16px; border-radius: 10px;
-      border: 1px solid var(--border);
-      background: rgba(6,9,15,0.5);
+    /* ── Body ── */
+    .t-body { padding: 24px 22px 20px; }
+    .t-rule {
+      border: none; border-top: 1px solid var(--b);
+      margin: 14px 0;
     }
-    .stat-label {
-      font-size: 9.5px; font-family: var(--mono); letter-spacing: 0.1em;
-      text-transform: uppercase; color: var(--muted); margin-bottom: 5px;
+    /* ── Section label ── */
+    .t-sec {
+      font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase;
+      color: var(--dm); margin-bottom: 10px; margin-top: 18px;
     }
-    .stat-value {
-      font-size: 13px; font-weight: 600; color: var(--text);
-      word-break: break-all;
+    .t-sec:first-child { margin-top: 0; }
+    /* ── Data rows ── */
+    .rows { display: flex; flex-direction: column; gap: 5px; }
+    .row {
+      display: grid; grid-template-columns: 160px 1fr auto;
+      align-items: baseline; gap: 8px; padding: 2px 0;
     }
-    .stat-value.gold { color: var(--gold); }
-    .stat-value.blue { color: var(--blue); }
-
-    /* ── Janus Badge ─────────────────────────────────────────── */
-    .info-sep { height: 1px; background: var(--border); margin: 16px 0; }
-
-    .janus-badge {
+    .rk {
+      font-size: 11px; color: var(--mm);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .rv {
+      font-size: 11.5px; color: var(--th);
+      word-break: break-all; min-width: 0;
+    }
+    .rv.amber { color: var(--amber); }
+    .rv.green { color: var(--green); }
+    .rv.blue  { color: var(--blue);  }
+    .rv.dim   { color: var(--mm);    }
+    .tag {
+      font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 1px 6px; border: 1px solid;
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .tag.green { color: var(--green); border-color: rgba(58,216,112,0.3); }
+    .tag.amber { color: var(--amber); border-color: rgba(192,138,56,0.3); }
+    .tag.blue  { color: var(--blue);  border-color: rgba(69,149,184,0.3); }
+    .tag.red   { color: var(--red);   border-color: rgba(224,80,80,0.3);  }
+    /* ── Verdict block ── */
+    .verdict {
+      border: 1px solid var(--b2); padding: 14px 16px; margin-top: 18px;
+    }
+    .v-main {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .v-label {
+      font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
+      color: var(--dm);
+    }
+    .v-value {
+      font-size: 13px; font-weight: 700; color: var(--green);
+      letter-spacing: 0.08em;
+    }
+    .v-bar {
+      display: flex; gap: 3px; margin-bottom: 10px;
+    }
+    .v-seg {
+      height: 3px; flex: 1; background: var(--green); opacity: 0.8;
+    }
+    .v-seg.dim { background: var(--b2); opacity: 1; }
+    .v-meta {
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .v-row {
+      display: grid; grid-template-columns: 100px 1fr;
+      gap: 8px; font-size: 10.5px;
+    }
+    .v-rk { color: var(--mm); }
+    .v-rv { color: var(--t); }
+    /* ── Footer ── */
+    .t-foot {
+      border-top: 1px solid var(--b); padding: 8px 22px;
+      background: #0a0b11;
       display: flex; align-items: center; justify-content: space-between;
     }
-    .badge-left {
-      display: flex; align-items: center; gap: 10px;
+    .t-foot-l { font-size: 9px; letter-spacing: 0.1em; color: var(--dm); }
+    .t-foot-r { font-size: 9px; color: var(--dm); }
+    /* ── No-data notice ── */
+    .no-data {
+      font-size: 10px; color: var(--dm); font-style: italic;
+      text-align: center; padding: 6px 0 2px;
     }
-    .badge-sigil {
-      width: 28px; height: 28px;
-      display: flex; align-items: center; justify-content: center;
-    }
-    .badge-sigil svg { width: 100%; height: 100%; }
-    .badge-text {
-      font-size: 9.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--muted);
-    }
-    .badge-text b { color: rgba(212,165,71,0.6); font-weight: 600; }
-    .badge-version {
-      font-size: 9px; font-family: var(--mono); color: var(--muted);
-      padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px;
-    }
-
-    /* ── Footer ──────────────────────────────────────────────── */
-    .page-footer {
-      font-size: 10px; letter-spacing: 0.15em;
-      text-transform: uppercase; color: rgba(74,82,112,0.35);
-    }
-
-    @media (max-width: 500px) {
-      .page { padding: 32px 14px; gap: 24px; }
-      .info-body { padding: 22px 18px 18px; }
-      .stats { grid-template-columns: 1fr; }
-      .hero-text h1 { font-size: 19px; }
+    @media (max-width: 480px) {
+      .t-body { padding: 18px 14px 16px; }
+      .row { grid-template-columns: 130px 1fr auto; }
     }
   </style>
 </head>
 <body>
+<div class="page">
+  <div class="terminal">
 
-  <canvas id="bg-canvas" aria-hidden="true"></canvas>
-
-  <main class="page">
-
-    <div class="hero">
-      <div class="shield">
-        <div class="shield-ring"></div>
-        <div class="shield-icon">&#128274;</div>
+    <div class="t-bar">
+      <div class="t-bar-left">
+        <div class="t-dots"><span></span><span></span><span></span></div>
+        <span class="t-title">janus / clearance</span>
       </div>
-      <div class="hero-text">
-        <h1>Access Granted</h1>
-        <p>You have been verified by the Janus Gateway Security Protocol.<br>
-           Your session is active and protected.</p>
-      </div>
+      <span class="t-badge">Access Granted</span>
     </div>
 
-    <div class="info-card">
-      <div class="info-accent"></div>
-      <div class="info-body">
+    <div class="t-body">
 
-        <div class="info-header">
-          <div class="info-dot"></div>
-          <span class="info-title">Session Active</span>
+      <!-- AGENT PROFILE -->
+      <div class="t-sec">Agent Profile</div>
+      <div class="rows">
+        <div class="row">
+          <span class="rk">client_ip</span>
+          <span class="rv amber" id="l-ip">—</span>
+          <span class="tag blue" id="t-geo" style="display:none"></span>
         </div>
-
-        <div class="stats">
-          <div class="stat">
-            <div class="stat-label">Status</div>
-            <div class="stat-value gold">Verified</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Token Expiry</div>
-            <div class="stat-value blue" id="token-expiry">24h</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Verified At</div>
-            <div class="stat-value" id="verified-at">—</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Protocol</div>
-            <div class="stat-value">PoW + Behavioral</div>
-          </div>
+        <div class="row">
+          <span class="rk">device</span>
+          <span class="rv" id="l-device">—</span>
+          <span></span>
         </div>
-
-        <div class="info-sep"></div>
-
-        <div class="janus-badge">
-          <div class="badge-left">
-            <div class="badge-sigil">
-              <svg viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M26 11 A15 15 0 0 0 26 41" stroke="#d4a547" stroke-width="1.6" fill="none" stroke-linecap="round"/>
-                <path d="M26 11 A15 15 0 0 1 26 41" stroke="#4db8db" stroke-width="1.6" fill="none" stroke-linecap="round"/>
-                <circle cx="18" cy="23" r="2" fill="#d4a547"/>
-                <circle cx="34" cy="23" r="2" fill="#4db8db"/>
-              </svg>
-            </div>
-            <span class="badge-text">Protected by <b>Janus</b></span>
-          </div>
-          <span class="badge-version">v0.2</span>
+        <div class="row">
+          <span class="rk">screen</span>
+          <span class="rv dim" id="l-screen">—</span>
+          <span></span>
         </div>
-
+        <div class="row">
+          <span class="rk">timezone</span>
+          <span class="rv dim" id="l-tz">—</span>
+          <span></span>
+        </div>
+        <div class="row">
+          <span class="rk">bot_score</span>
+          <span class="rv" id="l-risk">—</span>
+          <span class="tag" id="t-risk"></span>
+        </div>
       </div>
+
+      <hr class="t-rule">
+
+      <!-- CHALLENGE -->
+      <div class="t-sec">Challenge Log</div>
+      <div class="rows">
+        <div class="row">
+          <span class="rk">method</span>
+          <span class="rv" id="l-method">—</span>
+          <span></span>
+        </div>
+        <div class="row">
+          <span class="rk">difficulty</span>
+          <span class="rv" id="l-diff">—</span>
+          <span></span>
+        </div>
+        <div class="row">
+          <span class="rk">result</span>
+          <span class="rv green" id="l-result">—</span>
+          <span class="tag green">CLEARED</span>
+        </div>
+        <div class="row">
+          <span class="rk">throughput</span>
+          <span class="rv dim" id="l-compute">—</span>
+          <span></span>
+        </div>
+      </div>
+
+      <hr class="t-rule">
+
+      <!-- BEHAVIORAL -->
+      <div class="t-sec">Behavioral Analysis</div>
+      <div class="rows">
+        <div class="row">
+          <span class="rk">mouse_events</span>
+          <span class="rv" id="l-moves">—</span>
+          <span></span>
+        </div>
+        <div class="row">
+          <span class="rk">trajectory_entropy</span>
+          <span class="rv" id="l-entropy">—</span>
+          <span></span>
+        </div>
+        <div class="row">
+          <span class="rk">time_on_page</span>
+          <span class="rv" id="l-pagetime">—</span>
+          <span></span>
+        </div>
+        <div class="row">
+          <span class="rk">key_events</span>
+          <span class="rv dim" id="l-keys">—</span>
+          <span></span>
+        </div>
+        <div class="row">
+          <span class="rk">behavioral_verdict</span>
+          <span class="rv green">HUMAN</span>
+          <span class="tag green">PASS</span>
+        </div>
+      </div>
+
+      <!-- VERDICT -->
+      <div class="verdict">
+        <div class="v-main">
+          <span class="v-label">Verdict</span>
+          <span class="v-value">Clearance Granted</span>
+        </div>
+        <div class="v-bar" id="v-bar"></div>
+        <div class="v-meta">
+          <div class="v-row">
+            <span class="v-rk">session_ttl</span>
+            <span class="v-rv">86400s &middot; 24h</span>
+          </div>
+          <div class="v-row">
+            <span class="v-rk">issued_at</span>
+            <span class="v-rv" id="l-issued">—</span>
+          </div>
+          <div class="v-row">
+            <span class="v-rk">protocol</span>
+            <span class="v-rv" id="l-proto">—</span>
+          </div>
+        </div>
+      </div>
+
+      <p class="no-data" id="no-data" style="display:none">
+        No session data — complete verification through the gateway to view this report.
+      </p>
+
+    </div><!-- /.t-body -->
+
+    <div class="t-foot">
+      <span class="t-foot-l">janus v0.2 &middot; gateway security protocol</span>
+      <span class="t-foot-r" id="l-session">session active</span>
     </div>
 
-    <p class="page-footer">Gateway security protocol active</p>
-
-  </main>
+  </div>
+</div>
 
 <script>
-  // Populate "Verified At" with current time
-  document.getElementById('verified-at').textContent =
-    new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+(function () {
+  var rpt = null;
+  try { rpt = JSON.parse(sessionStorage.getItem('janus_report') || 'null'); } catch (e) {}
 
-  // Particle background
-  (function() {
-    var cv = document.getElementById('bg-canvas');
-    if (!cv) return;
-    var ctx = cv.getContext('2d');
-    var dpr = window.devicePixelRatio || 1, W, H, P = [];
-    function resize() {
-      W = innerWidth; H = innerHeight;
-      cv.width = W * dpr; cv.height = H * dpr;
-      cv.style.width = W + 'px'; cv.style.height = H + 'px';
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  function el(id) { return document.getElementById(id); }
+  function set(id, val) { var e = el(id); if (e) e.textContent = val; }
+
+  // Build verdict bar
+  (function buildBar() {
+    var bar = el('v-bar'); if (!bar) return;
+    var segs = 10;
+    for (var i = 0; i < segs; i++) {
+      var s = document.createElement('div');
+      s.className = 'v-seg' + (i < 8 ? '' : ' dim');
+      bar.appendChild(s);
     }
-    addEventListener('resize', resize); resize();
-    var N = Math.min(45, Math.floor(W * H / 22000));
-    for (var i = 0; i < N; i++) {
-      P.push({ x: Math.random()*W, y: Math.random()*H,
-        vx: (Math.random()-0.5)*0.2, vy: (Math.random()-0.5)*0.2,
-        r: Math.random()*1.2+0.4, a: Math.random()*0.2+0.04 });
-    }
-    function frame() {
-      ctx.clearRect(0,0,W,H);
-      for (var i = 0; i < P.length; i++) {
-        var p = P[i]; p.x += p.vx; p.y += p.vy;
-        if(p.x<0) p.x=W; if(p.x>W) p.x=0;
-        if(p.y<0) p.y=H; if(p.y>H) p.y=0;
-        ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
-        ctx.fillStyle='rgba(62,232,138,'+p.a+')'; ctx.fill();
-        for (var j = i+1; j < P.length; j++) {
-          var q=P[j], dx=p.x-q.x, dy=p.y-q.y, d=dx*dx+dy*dy;
-          if(d<12000){ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);
-            ctx.strokeStyle='rgba(77,184,219,'+(0.04*(1-d/12000))+')';ctx.lineWidth=0.4;ctx.stroke();}
-        }
-      }
-      requestAnimationFrame(frame);
-    }
-    frame();
   })();
+
+  if (!rpt) {
+    el('no-data').style.display = 'block';
+    set('l-issued', new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    set('l-proto', 'PoW + Behavioral');
+    return;
+  }
+
+  // Agent profile
+  set('l-ip', rpt.clientIP || '—');
+  var device = (rpt.isMobile ? 'mobile' : 'desktop');
+  if (rpt.hw) device += ' \u00b7 ' + rpt.hw + ' cores';
+  set('l-device', device);
+  set('l-screen', rpt.screen || '—');
+  set('l-tz', rpt.tz || '—');
+
+  var risk = typeof rpt.botScore === 'number' ? rpt.botScore : null;
+  if (risk !== null) {
+    set('l-risk', risk + ' / 100');
+    var riskEl = el('l-risk');
+    var tagEl  = el('t-risk');
+    if (risk <= 20) {
+      riskEl.className = 'rv green'; tagEl.textContent = 'LOW'; tagEl.className = 'tag green';
+    } else if (risk <= 50) {
+      riskEl.className = 'rv amber'; tagEl.textContent = 'MED'; tagEl.className = 'tag amber';
+    } else {
+      riskEl.className = 'rv'; tagEl.textContent = 'HIGH'; tagEl.className = 'tag red';
+    }
+  }
+
+  // Challenge
+  var method = rpt.method === 'interactive' ? 'interactive-grid' : 'proof-of-work';
+  set('l-method', method);
+  if (rpt.difficulty != null) set('l-diff', rpt.difficulty + ' bits');
+
+  if (rpt.method === 'interactive') {
+    set('l-result', 'correct sequence');
+    set('l-compute', 'manual cell selection');
+  } else {
+    var solved = rpt.solvedAt >= 0 ? 'iter ' + rpt.solvedAt.toLocaleString() + ' of ' + (rpt.maxIter || '?').toLocaleString() : 'exhausted — fallback used';
+    set('l-result', solved);
+    var compute = '';
+    if (rpt.hashRate) compute += rpt.hashRate.toLocaleString() + ' H/s';
+    if (rpt.powMs)   compute += (compute ? '  \u00b7  ' : '') + (rpt.powMs / 1000).toFixed(2) + 's';
+    set('l-compute', compute || '—');
+  }
+
+  // Behavioral
+  if (rpt.mouseMovs != null) set('l-moves', rpt.mouseMovs + ' events');
+  if (rpt.entropy   != null) set('l-entropy', rpt.entropy.toFixed(3) + ' rad\u00b2');
+  if (rpt.interactionMs != null) set('l-pagetime', rpt.interactionMs.toLocaleString() + ' ms');
+  if (rpt.keyPresses != null) set('l-keys', rpt.keyPresses + ' events');
+
+  // Verdict
+  if (rpt.verifiedAt) {
+    try {
+      var d = new Date(rpt.verifiedAt);
+      set('l-issued', d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
+          ' \u00b7 ' + d.toLocaleDateString([], { month: 'short', day: 'numeric' }));
+    } catch (e) { set('l-issued', rpt.verifiedAt); }
+  }
+  set('l-proto', method === 'interactive-grid' ? 'Interactive Grid + Behavioral' : 'PoW + Behavioral');
+
+  // Session footer
+  if (rpt.verifiedAt) {
+    var exp = new Date(new Date(rpt.verifiedAt).getTime() + 86400000);
+    el('l-session').textContent = 'expires ' + exp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+})();
 </script>
 </body>
 </html>
