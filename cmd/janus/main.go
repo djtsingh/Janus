@@ -18,6 +18,11 @@ func main() {
 		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
 		http.ServeFile(w, r, "assets/protected.html")
 	})
+	r.Get("/favicon.svg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFile(w, r, "assets/favicon.svg")
+	})
 	r.Get("/sensor.js", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=3600")
 		http.ServeFile(w, r, "assets/sensor.js")

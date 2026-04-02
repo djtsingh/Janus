@@ -107,6 +107,12 @@ func JanusMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// favicon bypasses verification so browsers can fetch it without a token
+		if r.URL.Path == "/favicon.svg" || r.URL.Path == "/favicon.ico" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		if strings.HasPrefix(r.URL.Path, "/janus/") {
 			log.Printf("Serving Janus API endpoint: %s", r.URL.Path)
 			janusRouter.ServeHTTP(w, r)
